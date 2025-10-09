@@ -115,9 +115,10 @@ class LeantimeClient:
     
     async def list_tickets(self, project_id: Optional[int] = None) -> list:
         """List tickets, optionally filtered by project."""
-        params = {}
+        searchCriteria = {}
         if project_id:
-            params["searchCriteria"] = {"projectId": project_id}
+            searchCriteria["currentProject"] = project_id
+        params = {"searchCriteria": searchCriteria}
         return await self.call("leantime.rpc.Tickets.Tickets.getAll", params)
     
     async def create_ticket(self, headline: str, project_id: int, user_id: int, date: Optional[str] = None, **kwargs) -> dict:
