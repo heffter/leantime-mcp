@@ -153,6 +153,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 user_id=arguments.get("user_id")
             )
         
+        elif name == "get_all_subtasks":
+            result = await client.get_all_subtasks(arguments["ticket_id"])
+        
+        elif name == "upsert_subtask":
+            result = await client.upsert_subtask(
+                parent_ticket=arguments["parent_ticket"],
+                headline=arguments["headline"],
+                project_id=arguments["project_id"],
+                user_id=arguments["user_id"],
+                date=arguments.get("date"),
+                description=arguments.get("description"),
+                status=arguments.get("status"),
+                priority=arguments.get("priority"),
+                assignedTo=arguments.get("assignedTo"),
+                tags=arguments.get("tags")
+            )
+        
         else:
             return [TextContent(
                 type="text",

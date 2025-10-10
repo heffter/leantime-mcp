@@ -281,6 +281,70 @@ TOOLS = [
             }
         }
     ),
+    Tool(
+        name="get_all_subtasks",
+        description="Get all subtasks for a specific ticket",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "ticket_id": {
+                    "type": "integer",
+                    "description": "The ID of the parent ticket"
+                }
+            },
+            "required": ["ticket_id"]
+        }
+    ),
+    Tool(
+        name="upsert_subtask",
+        description="Create or update a subtask for a ticket",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "parent_ticket": {
+                    "type": "integer",
+                    "description": "The ID of the parent ticket"
+                },
+                "headline": {
+                    "type": "string",
+                    "description": "Title/headline of the subtask"
+                },
+                "project_id": {
+                    "type": "integer",
+                    "description": "Project ID where the subtask will be created"
+                },
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user creating the subtask"
+                },
+                "date": {
+                    "type": "string",
+                    "description": "The date when the subtask is created (YYYY-MM-DD format)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Detailed description of the subtask"
+                },
+                "status": {
+                    "type": "integer",
+                    "description": "Status ID of the subtask"
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Priority level (e.g., 'high', 'medium', 'low')"
+                },
+                "assignedTo": {
+                    "type": "integer",
+                    "description": "User ID to assign the subtask to"
+                },
+                "tags": {
+                    "type": "string",
+                    "description": "Comma-separated list of tags to add to the subtask"
+                }
+            },
+            "required": ["parent_ticket", "headline", "project_id", "user_id"]
+        }
+    ),
 ]
 
 

@@ -222,3 +222,52 @@ class LeantimeClient:
         if user_id:
             params["userId"] = user_id
         return await self.call("leantime.rpc.Timesheets.getTimesheets", params)
+    
+    async def get_all_subtasks(self, ticket_id: int) -> list:
+        """Get all subtasks for a ticket.
+        
+        Args:
+            ticket_id: The ID of the parent ticket
+            
+        Returns:
+            A list of subtasks or false if an error occurred
+        """
+        params = {"ticketId": ticket_id}
+        return await self.call("leantime.rpc.Tickets.Tickets.getAllSubtasks", params)
+    
+    async def upsert_subtask(self, parent_ticket: int, headline: str, project_id: int, user_id: int, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> bool:
+        """Create or update a subtask.
+        
+        Args:
+            parent_ticket: The ID of the parent ticket
+            headline: Title/headline of the subtask
+            project_id: Project ID where the subtask will be created
+            user_id: The ID of the user creating the subtask
+            date: The date when the subtask is created (YYYY-MM-DD format). Defaults to current date if not provided.
+            tags: Comma-separated list of tags to add to the subtask
+            **kwargs: Additional parameters (same as addTicket)
+            
+        Returns:
+            True if the subtask was successfully created/updated
+        """
+        from datetime import datetime
+        
+        # Use current date if none provided
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        
+        # The API expects a 'values' parameter containing the subtask data
+        values = {
+            "headline": headline, 
+            "projectId": project_id,
+            "userId": user_id,
+            "date": date,
+            **kwargs
+        }
+        
+        # Add tags if provided
+        if tags is not None:
+            values["tags"] = tags
+        
+        params = {"values": values, "parentTicket": parent_ticket}
+        return await self.call("leantime.rpc.Tickets.Tickets.upsertSubtask", params)
