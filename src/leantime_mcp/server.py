@@ -11,11 +11,9 @@ import logging
 from typing import Any
 from dotenv import load_dotenv
 
-from mcp.server import Server
-from mcp.types import Tool, TextContent
+from fastmcp import FastMCP
 
-from .client import LeantimeClient, LeantimeAPIError
-from .tools import get_tools
+from leantime_mcp.client import LeantimeClient, LeantimeAPIError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +22,8 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize the MCP server
-app = Server("leantime-mcp")
+# Initialize the FastMCP server
+app = FastMCP("leantime-mcp")
 
 # Global Leantime client instance
 leantime_client: LeantimeClient = None
@@ -65,159 +63,232 @@ def get_client() -> LeantimeClient:
     return leantime_client
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """List all available Leantime MCP tools."""
-    return get_tools()
+# Tool functions will be defined below
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls by routing to appropriate Leantime API methods."""
+@app.tool()
+async def get_project(project_id: int) -> str:
+    """Get details of a specific project by ID."""
     try:
         client = get_client()
-        result = None
-        
-        # Route tool calls to appropriate client methods
-        if name == "get_project":
-            result = await client.get_project(arguments["project_id"])
-        
-        elif name == "list_projects":
-            result = await client.list_projects()
-        
-        elif name == "create_project":
-            result = await client.create_project(
-                name=arguments["name"],
-                details=arguments.get("details"),
-                clientId=arguments.get("clientId")
-            )
-        
-        elif name == "get_ticket":
-            result = await client.get_ticket(arguments["ticket_id"])
-        
-        elif name == "list_tickets":
-            result = await client.list_tickets(arguments.get("project_id"))
-        
-        elif name == "create_ticket":
-            result = await client.create_ticket(
-                headline=arguments["headline"],
-                project_id=arguments["project_id"],
-                user_id=arguments["user_id"],
-                date=arguments.get("date"),
-                description=arguments.get("description"),
-                status=arguments.get("status"),
-                priority=arguments.get("priority"),
-                assignedTo=arguments.get("assignedTo"),
-                tags=arguments.get("tags")
-            )
-        
-        elif name == "update_ticket":
-            ticket_id = arguments.pop("ticket_id")
-            project_id = arguments.pop("project_id")
-            result = await client.update_ticket(ticket_id, project_id, **arguments)
-        
-        elif name == "get_status_labels":
-            result = await client.get_status_labels()
-        
-        elif name == "get_user":
-            result = await client.get_user(arguments["user_id"])
-        
-        elif name == "list_users":
-            result = await client.list_users()
-        
-        elif name == "add_comment":
-            result = await client.add_comment(
-                module=arguments["module"],
-                module_id=arguments["module_id"],
-                comment=arguments["comment"]
-            )
-        
-        elif name == "get_comments":
-            result = await client.get_comments(
-                module=arguments["module"],
-                module_id=arguments["module_id"]
-            )
-        
-        elif name == "add_timesheet":
-            result = await client.add_timesheet(
-                user_id=arguments["user_id"],
-                ticket_id=arguments["ticket_id"],
-                hours=arguments["hours"],
-                date=arguments["date"],
-                description=arguments.get("description")
-            )
-        
-        elif name == "get_timesheets":
-            result = await client.get_timesheets(
-                project_id=arguments.get("project_id"),
-                user_id=arguments.get("user_id")
-            )
-        
-        elif name == "get_all_subtasks":
-            result = await client.get_all_subtasks(arguments["ticket_id"])
-        
-        elif name == "upsert_subtask":
-            result = await client.upsert_subtask(
-                parent_ticket=arguments["parent_ticket"],
-                headline=arguments["headline"],
-                project_id=arguments["project_id"],
-                user_id=arguments["user_id"],
-                date=arguments.get("date"),
-                description=arguments.get("description"),
-                status=arguments.get("status"),
-                priority=arguments.get("priority"),
-                assignedTo=arguments.get("assignedTo"),
-                tags=arguments.get("tags")
-            )
-        
-        else:
-            return [TextContent(
-                type="text",
-                text=f"Unknown tool: {name}"
-            )]
-        
-        # Format and return the result
-        return [TextContent(
-            type="text",
-            text=json.dumps(result, indent=2)
-        )]
-    
-    except LeantimeAPIError as e:
-        logger.error(f"Leantime API error: {e}")
-        return [TextContent(
-            type="text",
-            text=f"Leantime API Error ({e.code}): {e.message}"
-        )]
-    
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        return [TextContent(
-            type="text",
-            text=f"Configuration Error: {str(e)}"
-        )]
-    
+        result = await client.get_project(project_id)
+        return json.dumps(result, indent=2)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        return [TextContent(
-            type="text",
-            text=f"Error: {str(e)}"
-        )]
+        logger.error(f"Error getting project: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def list_projects() -> str:
+    """List all projects accessible to the user."""
+    try:
+        client = get_client()
+        result = await client.list_projects()
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error listing projects: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def create_project(name: str, details: str = None, clientId: int = None) -> str:
+    """Create a new project."""
+    try:
+        client = get_client()
+        result = await client.create_project(name=name, details=details, clientId=clientId)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating project: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_ticket(ticket_id: int) -> str:
+    """Get details of a specific ticket by ID."""
+    try:
+        client = get_client()
+        result = await client.get_ticket(ticket_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting ticket: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def list_tickets(project_id: int = None) -> str:
+    """List tickets, optionally filtered by project ID."""
+    try:
+        client = get_client()
+        result = await client.list_tickets(project_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error listing tickets: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def create_ticket(headline: str, project_id: int, user_id: int, date: str = None, 
+                       description: str = None, status: str = None, priority: str = None,
+                       assignedTo: str = None, tags: str = None) -> str:
+    """Create a new ticket."""
+    try:
+        client = get_client()
+        result = await client.create_ticket(
+            headline=headline, project_id=project_id, user_id=user_id, date=date,
+            description=description, status=status, priority=priority,
+            assignedTo=assignedTo, tags=tags
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating ticket: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def update_ticket(ticket_id: int, project_id: int, headline: str = None, description: str = None, 
+                       status: int = None, priority: str = None, assignedTo: int = None) -> str:
+    """Update an existing ticket."""
+    try:
+        client = get_client()
+        # Build kwargs from non-None parameters
+        kwargs = {}
+        if headline is not None:
+            kwargs['headline'] = headline
+        if description is not None:
+            kwargs['description'] = description
+        if status is not None:
+            kwargs['status'] = status
+        if priority is not None:
+            kwargs['priority'] = priority
+        if assignedTo is not None:
+            kwargs['assignedTo'] = assignedTo
+        
+        result = await client.update_ticket(ticket_id, project_id, **kwargs)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error updating ticket: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_status_labels() -> str:
+    """Get available status labels."""
+    try:
+        client = get_client()
+        result = await client.get_status_labels()
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting status labels: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_user(user_id: int) -> str:
+    """Get details of a specific user by ID."""
+    try:
+        client = get_client()
+        result = await client.get_user(user_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting user: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def list_users() -> str:
+    """List all users."""
+    try:
+        client = get_client()
+        result = await client.list_users()
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error listing users: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def add_comment(module: str, module_id: int, comment: str) -> str:
+    """Add a comment to a module (ticket, project, etc.)."""
+    try:
+        client = get_client()
+        result = await client.add_comment(module=module, module_id=module_id, comment=comment)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error adding comment: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_comments(module: str, module_id: int) -> str:
+    """Get comments for a module (ticket, project, etc.)."""
+    try:
+        client = get_client()
+        result = await client.get_comments(module=module, module_id=module_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting comments: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def add_timesheet(user_id: int, ticket_id: int, hours: float, date: str, description: str = None) -> str:
+    """Add a timesheet entry."""
+    try:
+        client = get_client()
+        result = await client.add_timesheet(
+            user_id=user_id, ticket_id=ticket_id, hours=hours, date=date, description=description
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error adding timesheet: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_timesheets(project_id: int = None, user_id: int = None) -> str:
+    """Get timesheets, optionally filtered by project or user."""
+    try:
+        client = get_client()
+        result = await client.get_timesheets(project_id=project_id, user_id=user_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting timesheets: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def get_all_subtasks(ticket_id: int) -> str:
+    """Get all subtasks for a ticket."""
+    try:
+        client = get_client()
+        result = await client.get_all_subtasks(ticket_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting subtasks: {e}")
+        return f"Error: {str(e)}"
+
+
+@app.tool()
+async def upsert_subtask(parent_ticket: int, headline: str,
+                        date: str = None, description: str = None, status: str = None,
+                        priority: str = None, assignedTo: str = None, tags: str = None) -> str:
+    """Create or update a subtask."""
+    try:
+        client = get_client()
+        result = await client.upsert_subtask(
+            parent_ticket_id=parent_ticket, headline=headline,
+            date=date, description=description, status=status, priority=priority,
+            assignedTo=assignedTo, tags=tags
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error upserting subtask: {e}")
+        return f"Error: {str(e)}"
 
 
 def main():
     """Main entry point for the MCP server."""
-    import asyncio
-    from mcp.server.stdio import stdio_server
-    
-    async def run():
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options()
-            )
-    
-    asyncio.run(run())
+    app.run()
 
 
 if __name__ == "__main__":

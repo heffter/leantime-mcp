@@ -309,14 +309,6 @@ TOOLS = [
                     "type": "string",
                     "description": "Title/headline of the subtask"
                 },
-                "project_id": {
-                    "type": "integer",
-                    "description": "Project ID where the subtask will be created"
-                },
-                "user_id": {
-                    "type": "integer",
-                    "description": "The ID of the user creating the subtask"
-                },
                 "date": {
                     "type": "string",
                     "description": "The date when the subtask is created (YYYY-MM-DD format)"
@@ -342,7 +334,7 @@ TOOLS = [
                     "description": "Comma-separated list of tags to add to the subtask"
                 }
             },
-            "required": ["parent_ticket", "headline", "project_id", "user_id"]
+            "required": ["parent_ticket", "headline"]
         }
     ),
 ]

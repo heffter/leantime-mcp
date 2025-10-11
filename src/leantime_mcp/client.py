@@ -235,20 +235,18 @@ class LeantimeClient:
         params = {"ticketId": ticket_id}
         return await self.call("leantime.rpc.Tickets.Tickets.getAllSubtasks", params)
     
-    async def upsert_subtask(self, parent_ticket: int, headline: str, project_id: int, user_id: int, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> bool:
+    async def upsert_subtask(self, parent_ticket_id: int, headline: str, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> dict:
         """Create or update a subtask.
         
         Args:
-            parent_ticket: The ID of the parent ticket
+            parent_ticket_id: The ID of the parent ticket
             headline: Title/headline of the subtask
-            project_id: Project ID where the subtask will be created
-            user_id: The ID of the user creating the subtask
             date: The date when the subtask is created (YYYY-MM-DD format). Defaults to current date if not provided.
             tags: Comma-separated list of tags to add to the subtask
-            **kwargs: Additional parameters (same as addTicket)
+            **kwargs: Additional parameters (description, status, priority, assignedTo, etc.)
             
         Returns:
-            True if the subtask was successfully created/updated
+            The created subtask data
         """
         from datetime import datetime
         
@@ -256,12 +254,33 @@ class LeantimeClient:
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
         
+        # Fetch the parent ticket data to get project_id and milestone_id
+        parent_ticket_data = await self.get_ticket(parent_ticket_id)
+        
+        if not parent_ticket_data:
+            raise ValueError(f"Parent ticket with ID {parent_ticket_id} not found")
+        
+        # Extract required fields from parent ticket
+        project_id = parent_ticket_data.get("projectId")
+        if not project_id:
+            raise ValueError(f"Could not determine projectId from parent ticket {parent_ticket_id}")
+        
+              # Extract required fields from parent ticket
+        user_id = parent_ticket_data.get("userId")
+        if not user_id:
+            raise ValueError(f"Could not determine userId from parent ticket {parent_ticket_id}")
+
+        milestone_id = parent_ticket_data.get("milestoneid")
+        
         # The API expects a 'values' parameter containing the subtask data
         values = {
-            "headline": headline, 
+            "headline": headline,
+            "type": "subtask",  # Mark this as a subtask
             "projectId": project_id,
             "userId": user_id,
             "date": date,
+            "dependingTicketId": parent_ticket_id,  # Link to parent ticket
+            "milestoneid": milestone_id if milestone_id else "",  # Use parent's milestone
             **kwargs
         }
         
@@ -269,5 +288,10 @@ class LeantimeClient:
         if tags is not None:
             values["tags"] = tags
         
-        params = {"values": values, "parentTicket": parent_ticket}
-        return await self.call("leantime.rpc.Tickets.Tickets.upsertSubtask", params)
+        # Use addTicket to create the subtask
+        params = {"values": values}
+        
+        # Debug logging
+        logger.info(f"Creating subtask via addTicket: type=subtask, dependingTicketId={parent_ticket_id}, milestoneid={milestone_id}")
+        
+        return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
