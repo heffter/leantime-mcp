@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 from dotenv import load_dotenv
 
 from fastmcp import FastMCP
