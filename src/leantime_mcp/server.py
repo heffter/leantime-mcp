@@ -12,12 +12,33 @@ from typing import Any
 from dotenv import load_dotenv
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from leantime_mcp.client import LeantimeClient, LeantimeAPIError
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+def _configure_logging() -> None:
+    """Configure root logging from the LOG_LEVEL env var (default INFO).
+
+    Invalid values fall back to INFO with a warning. Called from main() so
+    that importing this module does not mutate the root logger config.
+    """
+    requested = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    if requested in _VALID_LOG_LEVELS:
+        level = requested
+    else:
+        logging.basicConfig(level=logging.INFO)
+        logger.warning(
+            "Invalid LOG_LEVEL %r; expected one of %s. Falling back to INFO.",
+            requested, sorted(_VALID_LOG_LEVELS),
+        )
+        return
+    logging.basicConfig(level=getattr(logging, level))
 
 # Load environment variables
 load_dotenv()
@@ -66,6 +87,17 @@ def get_client() -> LeantimeClient:
 # Tool functions will be defined below
 
 
+@app.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health(_request: Request) -> JSONResponse:
+    """Liveness probe.
+
+    Intentionally does NOT contact Leantime. Reports the local MCP process
+    is alive so Docker/HEALTHCHECK and reverse proxies can distinguish a
+    crashed container from an upstream Leantime outage.
+    """
+    return JSONResponse({"status": "ok"})
+
+
 @app.tool()
 async def get_project(project_id: int) -> str:
     """Get details of a specific project by ID."""
@@ -107,10 +139,15 @@ async def list_tickets(project_id: int = None) -> str:
 
 
 @app.tool()
-async def create_ticket(headline: str, project_id: int, user_id: int, date: str = None, 
-                       description: str = None, status: str = None, priority: str = None,
-                       assignedTo: str = None, tags: str = None) -> str:
-    """Create a new ticket."""
+async def create_ticket(headline: str, project_id: int, user_id: int, date: str = None,
+                       description: str = None, status: int = None, priority: str = None,
+                       assignedTo: int = None, tags: str = None) -> str:
+    """Create a new ticket.
+
+    Args:
+        status: Status ID (int) matching one of the IDs returned by get_status_labels.
+        assignedTo: User ID (int) to assign the ticket to.
+    """
     client = get_client()
     result = await client.create_ticket(
         headline=headline, project_id=project_id, user_id=user_id, date=date,
@@ -163,6 +200,14 @@ async def list_users() -> str:
     """List all users."""
     client = get_client()
     result = await client.list_users()
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def get_user_by_email(email: str) -> str:
+    """Get details of a specific user by their email address."""
+    client = get_client()
+    result = await client.get_user_by_email(email)
     return json.dumps(result, indent=2)
 
 
@@ -224,6 +269,7 @@ async def upsert_subtask(parent_ticket: int, headline: str,
 
 def main():
     """Main entry point for the MCP server."""
+    _configure_logging()
     app.run()
 
 
