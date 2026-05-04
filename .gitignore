@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local session artifacts (not part of the upstream project)
+AUDIT.md
+CLAUDE.md
