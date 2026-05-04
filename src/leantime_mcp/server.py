@@ -25,8 +25,12 @@ _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 def _configure_logging() -> None:
     """Configure root logging from the LOG_LEVEL env var (default INFO).
 
-    Invalid values fall back to INFO with a warning. Called from main() so
-    that importing this module does not mutate the root logger config.
+    Invalid values fall back to INFO with a warning. Invoked at module
+    import time so the level applies under both the `leantime-mcp` console
+    script (which calls main()) and `fastmcp run server.py:app` (which
+    imports the module and runs `app` directly without calling main()).
+    Subsequent calls are idempotent: logging.basicConfig is documented as
+    a no-op once a handler is attached to the root logger.
     """
     requested = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     if requested in _VALID_LOG_LEVELS:
@@ -40,8 +44,11 @@ def _configure_logging() -> None:
         return
     logging.basicConfig(level=getattr(logging, level))
 
-# Load environment variables
+
+# Load environment variables and configure logging before FastMCP/uvicorn
+# initialise their own loggers, so LOG_LEVEL takes effect everywhere.
 load_dotenv()
+_configure_logging()
 
 # Initialize the FastMCP server
 app = FastMCP("leantime-mcp")
