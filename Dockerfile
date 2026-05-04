@@ -40,8 +40,8 @@ RUN groupadd --system app \
     && useradd --system --gid app --home /app --shell /usr/sbin/nologin app
 
 WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/src /app/src
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --from=builder --chown=app:app /app/src /app/src
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
