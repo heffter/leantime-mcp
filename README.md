@@ -158,20 +158,53 @@ This is a pure liveness probe. It does **not** contact Leantime, so it stays gre
 
 The server provides the following MCP tools:
 
-- `get_project` - Get details of a specific project
-- `list_projects` - List all accessible projects
-- `create_project` - Create a new project
-- `get_ticket` - Get ticket/task details
-- `list_tickets` - List tickets (optionally filtered by project)
-- `create_ticket` - Create a new ticket
-- `update_ticket` - Update an existing ticket
-- `get_user` - Get user details
-- `get_user_by_email` - Look up a user by email address
-- `list_users` - List all users
-- `add_comment` - Add a comment to a ticket or project
-- `get_comments` - Get comments for a module
-- `add_timesheet` - Log time to a ticket
-- `get_timesheets` - Query timesheet entries
+**Projects, tickets, users, comments, timesheets**
+
+- `get_project` / `list_projects` / `create_project`
+- `get_ticket` / `list_tickets` / `create_ticket` / `update_ticket`
+  - `create_ticket` and `update_ticket` accept optional `milestone_id` and `sprint_id` to attach the ticket to a milestone or sprint at create/update time.
+- `get_user` / `get_user_by_email` / `list_users`
+- `add_comment` / `get_comments` (works on any Leantime module: `ticket`, `project`, etc.)
+- `add_timesheet` / `get_timesheets`
+- `get_status_labels` - resolve status names to IDs
+
+**Subtasks**
+
+- `get_all_subtasks(ticket_id)`
+- `upsert_subtask(parent_ticket, headline, ...)` - inherits the parent's project and milestone
+
+**Milestones**
+
+- `list_milestones(project_id)` / `create_milestone(...)` / `update_milestone(...)` / `delete_milestone(milestone_id)`
+- Use `create_ticket(..., milestone_id=<id>)` to assign a new ticket to a milestone, or `update_ticket(..., milestone_id=<id>)` for an existing one (`milestone_id=0` to detach).
+- `get_milestone_progress` is *not* exposed: Leantime's RPC method requires a Milestone PHP object that JSON-RPC cannot construct.
+
+**Sprints**
+
+- `list_sprints` / `get_sprint` / `get_current_sprint_id` / `list_future_sprints`
+- `create_sprint(name, project_id, start_date, end_date)` / `update_sprint(sprint_id, ...)` (no `delete_sprint` - upstream Leantime does not expose it via RPC)
+- Use `create_ticket(..., sprint_id=<id>)` / `update_ticket(..., sprint_id=<id>)` for ticket-sprint membership.
+
+**Goals (Goalcanvas)**
+
+- `list_goals(project_id?, board_id?)` / `list_goal_board_items(board_id)`
+- `create_goal(title, project_id, board_id, description?, current_value?, start_value?, end_value?, assigned_to?, parent?)`
+
+**Files (read-only)**
+
+- `list_files_for_module(module, entity_id)` / `delete_file(file_id)`
+- File **upload** is not exposed via MCP. Leantime's upload endpoint requires a multipart/form-data POST that JSON-RPC cannot carry; use the Leantime web UI to attach files.
+
+**Wiki (read-only)**
+
+- `list_wikis(project_id)` / `get_wiki(wiki_id)`
+- `list_wiki_articles(wiki_id, user_id)` / `get_wiki_article(article_id, project_id?)` / `get_wiki_article_history(article_id, limit=20)`
+- Wiki article **creation/editing** is not exposed via MCP because Leantime's `createArticle` / `updateArticle` accept PHP model objects, not JSON. Use the web UI to author wiki content.
+
+**Ideas (read-only polling)**
+
+- `list_new_ideas(project_id?, board_id?)` / `list_updated_ideas(project_id?, board_id?)`
+- The Leantime Ideas service does not expose CRUD endpoints over RPC; idea creation/editing is web-UI only.
 
 
 ## Deployment
