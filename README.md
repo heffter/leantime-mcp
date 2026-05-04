@@ -156,7 +156,7 @@ This is a pure liveness probe. It does **not** contact Leantime, so it stays gre
 
 ## Available Tools
 
-The server provides the following MCP tools:
+The server exposes 59 MCP tools spanning the Leantime domains below, plus a non-tool `GET /health` route documented in [Health endpoint](#health-endpoint). Each tool's docstring is the canonical reference; this list is the index.
 
 **Projects**
 
@@ -216,7 +216,8 @@ The server provides the following MCP tools:
 **Goals (Goalcanvas)**
 
 - `list_goals(project_id?, board_id?)` / `list_goal_board_items(board_id)`
-- `create_goal(title, project_id, board_id, description?, current_value?, start_value?, end_value?, assigned_to?, parent?)`
+- `create_goal(title, project_id, board_id, description?, current_value?, start_value?, end_value?, metric_type?, assigned_to?, parent?)`
+- *Not exposed*: `update_goal` / `delete_goal` - Leantime's Goalcanvas service does not expose update or delete methods over RPC. Edit goals in the web UI.
 
 **Files (read-only)**
 
@@ -241,6 +242,8 @@ These are documented inline in each tool's docstring; collected here as a quick 
 - **`add_comment` returns `-32000` even on success** when authenticated via API key. Leantime's `addComment` saves the comment, then dispatches a notification using `session('userdata.id')`. In stateless API contexts that session value is null, the notification step throws, and the error bubbles up. The comment IS persisted - verify with `get_comments`. (Source: `app/Domain/Comments/Services/Comments.php`.)
 - **`add_comment` requires `father` to always be present** in the values dict. Leantime checks `isset($values['father'])`, which is false in PHP for missing keys; the tool always sends it (defaulting to 0). Older versions accepted the key being absent.
 - **`update_milestone` fetches before writing.** Leantime's `quickUpdateMilestone` fails with "Undefined array key" on any field the PHP method touches but the request omits, so the tool reads the current milestone first and merges your changes over it. Pass only the fields you want to change.
+- **`update_user` fetches before writing, and renames `username` to `user`.** Leantime's `editUser` repository code reads `firstname`/`lastname`/`user`/`status`/`role`/`clientId` without an isset() guard and uses the awkward key `user` (not `username`) for the email address. The tool reads the current user record first, merges your changes, and translates the field name automatically. Pass only the fields you want to change.
+- **`Users.addUser` / `Users.editUser` wrap fields under `{"values": {...}}`** rather than accepting flat top-level params. Handled internally by `create_user` / `update_user`; you don't need to think about it.
 - **`get_milestone_progress` is not exposed.** The PHP signature requires a `Milestone` model object; JSON-RPC cannot construct it.
 - **`getTimesheets`/`getAll` for timesheets is not exposed.** Same Carbon-object issue. `get_timesheets` here uses `pollForNewTimesheets` instead.
 - **No deletion** for projects, sprints, or goals via RPC - Leantime's service layer does not expose those operations. Use the web UI.
