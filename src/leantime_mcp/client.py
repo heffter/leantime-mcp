@@ -374,7 +374,7 @@ class LeantimeClient:
         current = await self.get_user(user_id)
         if not current:
             raise ValueError(f"User with ID {user_id} not found")
-        merged: dict = {
+        merged: dict[str, Any] = {
             "firstname": values.get("firstname", current.get("firstname", "")),
             "lastname": values.get("lastname", current.get("lastname", "")),
             "user": values.get("user", values.get("username", current.get("username", ""))),
