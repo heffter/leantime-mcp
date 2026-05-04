@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2025 Daniel Eder
+#
+# SPDX-License-Identifier: CC0-1.0
+
+# VCS / project metadata
+.git
+.gitignore
+.github
+
+# Python virtualenvs and caches
+.venv
+__pycache__
+*.py[codz]
+*$py.class
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+htmlcov
+.tox
+.nox
+
+# Local secrets / runtime config
+.env
+.env.*
+!.env.example
+
+# Build artifacts / packaging
+dist
+build
+*.egg-info
+
+# Documentation and license metadata not needed in the runtime image.
+# README.md must remain in the build context because pyproject.toml
+# references it via `readme = "README.md"` and hatchling validates that.
+*.md
+!README.md
+LICENSES
+REUSE.toml
+
+# Audit / planning artifacts (explicit; redundant with *.md but readable)
+AUDIT.md
+CLAUDE.md
+
+# Editor / OS junk
+.idea
+.vscode
+.DS_Store
