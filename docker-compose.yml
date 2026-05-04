@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2025 Daniel Eder
+#
+# SPDX-License-Identifier: MIT
+#
+# Deployment EXAMPLE for leantime-mcp on a home NAS / LAN.
+#
+# Intended hostname for the deployed service: leantime.mcp.home.lan
+# Container name: leantime-mcp (Docker disallows dots in container names).
+#
+# This compose file is opinionated for the audit-driven hardened fork:
+#   - read_only: the service writes nothing to disk
+#   - cap_drop ALL: no Linux capabilities are required
+#   - no-new-privileges: prevents setuid/file-cap escalation inside the container
+#
+# Put a reverse proxy with auth (e.g. Caddy basicauth, mTLS, Tailscale) in front
+# of port 8000. The MCP HTTP transport itself is unauthenticated.
+
+services:
+  leantime-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: leantime-mcp:local
+    container_name: leantime-mcp
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
