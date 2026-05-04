@@ -334,6 +334,147 @@ class LeantimeClient:
     # not an int, so the JSON-RPC dispatcher cannot cast a plain integer.
     # Verified empirically against the running instance.
 
+    # Sprints
+
+    async def list_sprints(self, project_id: int) -> list:
+        """List all sprints for a project."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getAllSprints", {"projectId": project_id})
+
+    async def get_sprint(self, sprint_id: int) -> dict:
+        """Fetch a single sprint by ID."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getSprint", {"id": sprint_id})
+
+    async def get_current_sprint_id(self, project_id: int) -> Any:
+        """Return the ID of the currently active sprint for a project, or false."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getCurrentSprintId", {"projectId": project_id})
+
+    async def list_future_sprints(self, project_id: int) -> Any:
+        """List all future (not yet started) sprints for a project."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getAllFutureSprints", {"projectId": project_id})
+
+    async def create_sprint(self, name: str, project_id: int, start_date: str, end_date: str) -> Any:
+        """Create a new sprint. Returns the new sprint ID or false."""
+        params = {
+            "name": name,
+            "projectId": project_id,
+            "startDate": start_date,
+            "endDate": end_date,
+        }
+        return await self.call("leantime.rpc.Sprints.Sprints.addSprint", params)
+
+    async def update_sprint(self, sprint_id: int,
+                            name: Optional[str] = None,
+                            project_id: Optional[int] = None,
+                            start_date: Optional[str] = None,
+                            end_date: Optional[str] = None) -> Any:
+        """Update an existing sprint (name / project / dates)."""
+        params: dict = {"id": sprint_id}
+        if name is not None:
+            params["name"] = name
+        if project_id is not None:
+            params["projectId"] = project_id
+        if start_date is not None:
+            params["startDate"] = start_date
+        if end_date is not None:
+            params["endDate"] = end_date
+        return await self.call("leantime.rpc.Sprints.Sprints.editSprint", params)
+
+    # Goalcanvas
+
+    async def list_goals(self, project_id: Optional[int] = None,
+                         board_id: Optional[int] = None) -> list:
+        """List goals, optionally filtered by project and/or board."""
+        params: dict = {}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if board_id is not None:
+            params["board"] = board_id
+        return await self.call("leantime.rpc.Goalcanvas.Goalcanvas.pollGoals", params)
+
+    async def list_goal_board_items(self, board_id: int) -> list:
+        """List all goal items on a specific Goalcanvas board, with progress."""
+        return await self.call("leantime.rpc.Goalcanvas.Goalcanvas.getCanvasItemsById", {"id": board_id})
+
+    async def create_goal(self, values: dict) -> int:
+        """Create a goal item. `values` is a free-form Leantime goal dict;
+        common keys: title, description, projectId, board, currentValue,
+        startValue, endValue, metricType, parent.
+        """
+        return await self.call("leantime.rpc.Goalcanvas.Goalcanvas.createGoal", {"values": values})
+
+    # Files (attachments) - read + delete only.
+    # Upload requires a PHP $_FILES-style array which JSON-RPC cannot carry;
+    # use Leantime's web UI or HTTP multipart endpoint to upload files.
+
+    async def list_files_for_module(self, module: str, entity_id: int,
+                                    user_id: Optional[int] = None) -> list:
+        """List files attached to a module entity (e.g. module='ticket', entity_id=<ticket id>)."""
+        params: dict = {"module": module, "entityId": entity_id}
+        if user_id is not None:
+            params["userId"] = user_id
+        return await self.call("leantime.rpc.Files.Files.getFilesByModule", params)
+
+    async def delete_file(self, file_id: int) -> bool:
+        """Delete a file attachment by its file ID."""
+        return await self.call("leantime.rpc.Files.Files.deleteFile", {"fileId": file_id})
+
+    # Wiki - read only.
+    # Create / update endpoints in Leantime's Wiki service expect PHP model
+    # objects rather than plain dicts, so they cannot be invoked from a
+    # standard JSON-RPC client. Use the web UI to author wiki content.
+
+    async def list_wikis(self, project_id: int) -> list:
+        """List wiki spaces in a project."""
+        return await self.call("leantime.rpc.Wiki.Wiki.getAllProjectWikis", {"projectId": project_id})
+
+    async def get_wiki(self, wiki_id: int) -> dict:
+        """Fetch a single wiki space's metadata."""
+        return await self.call("leantime.rpc.Wiki.Wiki.getWiki", {"id": wiki_id})
+
+    async def list_wiki_articles(self, wiki_id: int, user_id: int) -> list:
+        """List article headlines in a wiki space."""
+        params = {"wikiId": wiki_id, "userId": user_id}
+        return await self.call("leantime.rpc.Wiki.Wiki.getAllWikiHeadlines", params)
+
+    async def get_wiki_article(self, article_id: int,
+                               project_id: Optional[int] = None) -> dict:
+        """Fetch a wiki article (full content)."""
+        params: dict = {"id": article_id}
+        if project_id is not None:
+            params["projectId"] = project_id
+        return await self.call("leantime.rpc.Wiki.Wiki.getArticle", params)
+
+    async def get_wiki_article_history(self, article_id: int,
+                                       limit: int = 20) -> list:
+        """Fetch a wiki article's revision/edit history."""
+        return await self.call("leantime.rpc.Wiki.Wiki.getArticleActivity",
+                               {"articleId": article_id, "limit": limit})
+
+    # Ideas - read-only polling.
+    # The Leantime Ideas service exposes only poll endpoints over RPC;
+    # CRUD methods for ideas are not @api-callable. Use the web UI to
+    # create / edit ideas.
+
+    async def list_new_ideas(self, project_id: Optional[int] = None,
+                             board_id: Optional[int] = None) -> list:
+        """Poll for newly created ideas, optionally scoped to project and board."""
+        params: dict = {}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if board_id is not None:
+            params["board"] = board_id
+        return await self.call("leantime.rpc.Ideas.Ideas.pollForNewIdeas", params)
+
+    async def list_updated_ideas(self, project_id: Optional[int] = None,
+                                 board_id: Optional[int] = None) -> list:
+        """Poll for recently modified ideas, optionally scoped to project and board."""
+        params: dict = {}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if board_id is not None:
+            params["board"] = board_id
+        return await self.call("leantime.rpc.Ideas.Ideas.pollForUpdatedIdeas", params)
+
     async def upsert_subtask(self, parent_ticket_id: int, headline: str, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> dict:
         """Create or update a subtask.
         

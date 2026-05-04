@@ -372,6 +372,214 @@ async def upsert_subtask(parent_ticket: int, headline: str,
     return json.dumps(result, indent=2)
 
 
+# ---- Sprints ----
+
+@app.tool()
+async def list_sprints(project_id: int) -> str:
+    """List all sprints for a project."""
+    client = get_client()
+    return json.dumps(await client.list_sprints(project_id), indent=2)
+
+
+@app.tool()
+async def get_sprint(sprint_id: int) -> str:
+    """Fetch a single sprint by ID."""
+    client = get_client()
+    return json.dumps(await client.get_sprint(sprint_id), indent=2)
+
+
+@app.tool()
+async def get_current_sprint_id(project_id: int) -> str:
+    """Return the ID of the currently active sprint for a project, or false if none."""
+    client = get_client()
+    return json.dumps(await client.get_current_sprint_id(project_id), indent=2)
+
+
+@app.tool()
+async def list_future_sprints(project_id: int) -> str:
+    """List all future (not-yet-started) sprints for a project."""
+    client = get_client()
+    return json.dumps(await client.list_future_sprints(project_id), indent=2)
+
+
+@app.tool()
+async def create_sprint(name: str, project_id: int, start_date: str, end_date: str) -> str:
+    """Create a new sprint. Dates are YYYY-MM-DD."""
+    client = get_client()
+    return json.dumps(await client.create_sprint(name, project_id, start_date, end_date), indent=2)
+
+
+@app.tool()
+async def update_sprint(sprint_id: int,
+                        name: Optional[str] = None,
+                        project_id: Optional[int] = None,
+                        start_date: Optional[str] = None,
+                        end_date: Optional[str] = None) -> str:
+    """Update an existing sprint's name, project, or date range."""
+    client = get_client()
+    return json.dumps(
+        await client.update_sprint(sprint_id, name=name, project_id=project_id,
+                                   start_date=start_date, end_date=end_date),
+        indent=2,
+    )
+
+
+# ---- Goalcanvas ----
+
+@app.tool()
+async def list_goals(project_id: Optional[int] = None,
+                     board_id: Optional[int] = None) -> str:
+    """List Goalcanvas goals, optionally filtered by project and/or board."""
+    client = get_client()
+    return json.dumps(await client.list_goals(project_id=project_id, board_id=board_id), indent=2)
+
+
+@app.tool()
+async def list_goal_board_items(board_id: int) -> str:
+    """List all goal items on a Goalcanvas board, including computed progress."""
+    client = get_client()
+    return json.dumps(await client.list_goal_board_items(board_id), indent=2)
+
+
+@app.tool()
+async def create_goal(title: str, project_id: int, board_id: int,
+                      description: Optional[str] = None,
+                      current_value: Optional[float] = None,
+                      start_value: Optional[float] = None,
+                      end_value: Optional[float] = None,
+                      assigned_to: Optional[int] = None,
+                      parent: Optional[int] = None) -> str:
+    """Create a goal on a Goalcanvas board.
+
+    Args:
+        title: Goal headline.
+        project_id: Project the goal belongs to.
+        board_id: Goalcanvas board to add the goal to.
+        description: Optional long-form description.
+        current_value / start_value / end_value: Optional metric tracking
+            fields for progress calculation.
+        assigned_to: Optional user ID to assign the goal to.
+        parent: Optional parent goal ID (for KPI hierarchies).
+    """
+    values: dict = {
+        "title": title,
+        "projectId": project_id,
+        "board": board_id,
+    }
+    if description is not None:
+        values["description"] = description
+    if current_value is not None:
+        values["currentValue"] = current_value
+    if start_value is not None:
+        values["startValue"] = start_value
+    if end_value is not None:
+        values["endValue"] = end_value
+    if assigned_to is not None:
+        values["assignedTo"] = assigned_to
+    if parent is not None:
+        values["parent"] = parent
+    client = get_client()
+    return json.dumps(await client.create_goal(values), indent=2)
+
+
+# ---- Files (read + delete; upload requires multipart, not RPC-callable) ----
+
+@app.tool()
+async def list_files_for_module(module: str, entity_id: int,
+                                user_id: Optional[int] = None) -> str:
+    """List files attached to a module entity.
+
+    `module` is a Leantime module name like 'ticket', 'project', or
+    'canvas'; `entity_id` is the ID within that module. NOTE: file
+    upload is not exposed via JSON-RPC (Leantime's upload endpoint
+    requires multipart). Use Leantime's web UI to attach files.
+    """
+    client = get_client()
+    return json.dumps(
+        await client.list_files_for_module(module, entity_id, user_id=user_id),
+        indent=2,
+    )
+
+
+@app.tool()
+async def delete_file(file_id: int) -> str:
+    """Delete a file attachment by its file ID."""
+    client = get_client()
+    return json.dumps(await client.delete_file(file_id), indent=2)
+
+
+# ---- Wiki (read-only; create/update require PHP model objects) ----
+
+@app.tool()
+async def list_wikis(project_id: int) -> str:
+    """List wiki spaces in a project.
+
+    NOTE: creating new wiki spaces or articles is not exposed via the
+    MCP layer because Leantime's Wiki create methods accept PHP model
+    objects rather than JSON. Use the web UI to author wiki content.
+    """
+    client = get_client()
+    return json.dumps(await client.list_wikis(project_id), indent=2)
+
+
+@app.tool()
+async def get_wiki(wiki_id: int) -> str:
+    """Fetch metadata for a single wiki space."""
+    client = get_client()
+    return json.dumps(await client.get_wiki(wiki_id), indent=2)
+
+
+@app.tool()
+async def list_wiki_articles(wiki_id: int, user_id: int) -> str:
+    """List article headlines in a wiki space."""
+    client = get_client()
+    return json.dumps(await client.list_wiki_articles(wiki_id, user_id), indent=2)
+
+
+@app.tool()
+async def get_wiki_article(article_id: int,
+                           project_id: Optional[int] = None) -> str:
+    """Fetch a wiki article's full content."""
+    client = get_client()
+    return json.dumps(await client.get_wiki_article(article_id, project_id=project_id), indent=2)
+
+
+@app.tool()
+async def get_wiki_article_history(article_id: int, limit: int = 20) -> str:
+    """Fetch the revision history for a wiki article (most recent first)."""
+    client = get_client()
+    return json.dumps(await client.get_wiki_article_history(article_id, limit=limit), indent=2)
+
+
+# ---- Ideas (read-only polling) ----
+
+@app.tool()
+async def list_new_ideas(project_id: Optional[int] = None,
+                         board_id: Optional[int] = None) -> str:
+    """Poll for newly created ideas, optionally scoped to project and board.
+
+    NOTE: idea creation / editing is not exposed via the MCP layer (the
+    Leantime Ideas service does not expose CRUD endpoints over JSON-RPC).
+    Use the web UI to manage ideas.
+    """
+    client = get_client()
+    return json.dumps(
+        await client.list_new_ideas(project_id=project_id, board_id=board_id),
+        indent=2,
+    )
+
+
+@app.tool()
+async def list_updated_ideas(project_id: Optional[int] = None,
+                             board_id: Optional[int] = None) -> str:
+    """Poll for recently modified ideas, optionally scoped to project and board."""
+    client = get_client()
+    return json.dumps(
+        await client.list_updated_ideas(project_id=project_id, board_id=board_id),
+        indent=2,
+    )
+
+
 def main():
     """Main entry point for the MCP server."""
     _configure_logging()
