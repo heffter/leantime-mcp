@@ -180,6 +180,17 @@ The recommended way to run this fork as a long-running service is the included `
 
 Intended hostname for the deployed service: `leantime.mcp.home.lan`. Container name: `leantime-mcp` (Docker disallows dots in container names).
 
+### Choosing `LEANTIME_URL`
+
+There are two recommended shapes depending on how your hosts are laid out:
+
+| Topology | `LEANTIME_URL` | Why |
+|---|---|---|
+| **Co-located** — MCP and Leantime on the same host | `http://<host-internal-ip>:<leantime-port>` (e.g. `http://10.0.0.110:8090`) | Traffic never leaves the box, so DNS, reverse proxy, and TLS termination are pure overhead. Fewer dependencies, fewer failure modes. |
+| **Cross-host** — MCP and Leantime on different machines | `https://leantime.example.com` | External name resolution and TLS certificate verification both matter once traffic crosses the network. Use the public DNS name. |
+
+The container only ever calls `LEANTIME_URL`; everything else (the MCP endpoint your clients connect to) is independent of this setting. You can safely change just this one variable to switch topologies.
+
 ### Quickstart with docker-compose
 
 ```bash
@@ -199,6 +210,23 @@ docker compose logs -f leantime-mcp
 ```
 
 The MCP endpoint is then available at `http://leantime.mcp.home.lan:8000/mcp` for clients that support `streamableHttp`.
+
+### Troubleshooting: LAN-local hostnames fail to resolve inside the container
+
+If `LEANTIME_URL` uses a hostname in a LAN-local TLD (`.home.lan`, `.local`, `.lan`, `.internal`, an mDNS name, or anything that's only resolvable via your router or `/etc/hosts`), DNS will fail from inside the container. Docker's default bridge network does **not** inherit the host's `/etc/hosts` entries or use mDNS, so the container's resolver cannot see those names even though your shell on the host can. Symptom: tool calls fail with `httpx.ConnectError`/`getaddrinfo failed` even though `curl <url>` works fine on the host.
+
+Three fixes, easiest first:
+
+1. **Use the IP directly** — set `LEANTIME_URL=http://<lan-ip>:<port>`. This is the co-located case in the table above and side-steps DNS entirely.
+2. **Pin the hostname with `--add-host`** — add `--add-host=leantime.home.lan:10.0.0.110` to `docker run`, or `extra_hosts: ["leantime.home.lan:10.0.0.110"]` to your compose service. The container gets a static `/etc/hosts` entry just for that name.
+3. **Point Docker at your LAN DNS** — `--dns=<your-LAN-DNS-IP>` on `docker run`, or `dns: [<ip>]` in compose. Cleanest if you have an internal DNS server that authoritatively serves the zone.
+
+To verify resolution from inside the container:
+
+```bash
+docker exec leantime-mcp getent hosts leantime.home.lan
+docker exec leantime-mcp wget --spider -S http://10.0.0.110:8090/
+```
 
 ### Reverse proxy and authentication
 
