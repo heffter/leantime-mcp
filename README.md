@@ -158,20 +158,47 @@ This is a pure liveness probe. It does **not** contact Leantime, so it stays gre
 
 The server provides the following MCP tools:
 
-**Projects, tickets, users, comments, timesheets**
+**Projects**
 
 - `get_project` / `list_projects` / `create_project`
-- `get_ticket` / `list_tickets` / `create_ticket` / `update_ticket`
-  - `create_ticket` and `update_ticket` accept optional `milestone_id` and `sprint_id` to attach the ticket to a milestone or sprint at create/update time.
-- `get_user` / `get_user_by_email` / `list_users`
-- `add_comment` / `get_comments` (works on any Leantime module: `ticket`, `project`, etc.)
-- `add_timesheet` / `get_timesheets`
+- `edit_project(project_id, values)` / `patch_project(project_id, params)` (partial update)
+- `duplicate_project(project_id, client_id, project_name, ...)` - deep clone (copies tickets, milestones, canvases; not comments / files / timesheets)
+- `get_project_progress` / `get_users_assigned_to_project` / `edit_user_project_relations`
+- *Not exposed*: `delete_project` - doesn't exist in Leantime's service layer; use the web UI.
+
+**Tickets**
+
+- `get_ticket` / `list_tickets`
+- `create_ticket` / `update_ticket` - accept optional `milestone_id` and `sprint_id` to attach the ticket to a milestone or sprint
+- `quick_create_ticket(...)` - reduced field set, wraps fields under inner `{"params": {...}}` per Leantime's contract
+- `patch_ticket(ticket_id, params)` - partial update; only fields present in `params` are written
+- `delete_ticket(ticket_id)` - hard delete (subtasks too)
+- `move_ticket(ticket_id, project_id)` - move ticket and milestone children to a different project
 - `get_status_labels` - resolve status names to IDs
 
 **Subtasks**
 
 - `get_all_subtasks(ticket_id)`
 - `upsert_subtask(parent_ticket, headline, ...)` - inherits the parent's project and milestone
+
+**Users**
+
+- `get_user` / `get_user_by_email` / `list_users`
+- `create_user(firstname, lastname, username, password, role='20', ...)` - admin scoped
+- `update_user(user_id, values)` / `delete_user(user_id)` - admin scoped
+
+**Comments**
+
+- `add_comment(module, entity_id, text, father?, entity_headline?)` - works on any Leantime module (ticket, project, etc.)
+- `update_comment(comment_id, text)` / `delete_comment(comment_id)`
+- `get_comments(module, entity_id)`
+
+**Timesheets**
+
+- `add_timesheet(...)` (legacy `addTime` path) and `upsert_timesheet(ticket_id, user_id, date, hours, kind?, description?)` - prefer upsert
+- `delete_timesheet(timesheet_id)`
+- `get_timesheets(project_id?, user_id?)` - poll-style, returns recently-created entries (Leantime has no generic "list all timesheets" RPC; the underlying `getAll` requires Carbon objects that JSON-RPC cannot carry)
+- `poll_updated_timesheets(project_id?, user_id?)` - sibling for recently-modified entries
 
 **Milestones**
 
@@ -181,8 +208,9 @@ The server provides the following MCP tools:
 
 **Sprints**
 
-- `list_sprints` / `get_sprint` / `get_current_sprint_id` / `list_future_sprints`
-- `create_sprint(name, project_id, start_date, end_date)` / `update_sprint(sprint_id, ...)` (no `delete_sprint` - upstream Leantime does not expose it via RPC)
+- `list_sprints` / `get_sprint` / `get_current_sprint_id` / `list_future_sprints` / `get_upcoming_sprint`
+- `get_sprint_cumulative_report(project_id)` - cumulative-flow report data
+- `create_sprint(name, project_id, start_date, end_date)` / `update_sprint(sprint_id, ...)` - no `delete_sprint`; Leantime does not expose deletion via RPC
 - Use `create_ticket(..., sprint_id=<id>)` / `update_ticket(..., sprint_id=<id>)` for ticket-sprint membership.
 
 **Goals (Goalcanvas)**
@@ -205,6 +233,18 @@ The server provides the following MCP tools:
 
 - `list_new_ideas(project_id?, board_id?)` / `list_updated_ideas(project_id?, board_id?)`
 - The Leantime Ideas service does not expose CRUD endpoints over RPC; idea creation/editing is web-UI only.
+
+### Known Leantime API quirks the tools work around
+
+These are documented inline in each tool's docstring; collected here as a quick reference.
+
+- **`add_comment` returns `-32000` even on success** when authenticated via API key. Leantime's `addComment` saves the comment, then dispatches a notification using `session('userdata.id')`. In stateless API contexts that session value is null, the notification step throws, and the error bubbles up. The comment IS persisted - verify with `get_comments`. (Source: `app/Domain/Comments/Services/Comments.php`.)
+- **`add_comment` requires `father` to always be present** in the values dict. Leantime checks `isset($values['father'])`, which is false in PHP for missing keys; the tool always sends it (defaulting to 0). Older versions accepted the key being absent.
+- **`update_milestone` fetches before writing.** Leantime's `quickUpdateMilestone` fails with "Undefined array key" on any field the PHP method touches but the request omits, so the tool reads the current milestone first and merges your changes over it. Pass only the fields you want to change.
+- **`get_milestone_progress` is not exposed.** The PHP signature requires a `Milestone` model object; JSON-RPC cannot construct it.
+- **`getTimesheets`/`getAll` for timesheets is not exposed.** Same Carbon-object issue. `get_timesheets` here uses `pollForNewTimesheets` instead.
+- **No deletion** for projects, sprints, or goals via RPC - Leantime's service layer does not expose those operations. Use the web UI.
+- **`quick*` methods wrap their fields under an inner `{"params": {...}}` key** rather than `{"values": {...}}` like normal ticket mutations. Handled internally; you don't need to think about it from the MCP side.
 
 
 ## Deployment
