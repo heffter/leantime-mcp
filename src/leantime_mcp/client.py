@@ -121,48 +121,68 @@ class LeantimeClient:
         params = {"searchCriteria": searchCriteria}
         return await self.call("leantime.rpc.Tickets.Tickets.getAll", params)
     
-    async def create_ticket(self, headline: str, project_id: int, user_id: int, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> dict:
+    async def create_ticket(self, headline: str, project_id: int, user_id: int,
+                            date: Optional[str] = None, tags: Optional[str] = None,
+                            milestone_id: Optional[int] = None,
+                            sprint_id: Optional[int] = None,
+                            **kwargs) -> dict:
         """Create a new ticket.
-        
+
         Args:
             headline: Title/headline of the ticket
             project_id: Project ID where the ticket will be created
             user_id: The ID of the user creating the ticket
             date: The date when the ticket is created (YYYY-MM-DD format). Defaults to current date if not provided.
             tags: Comma-separated list of tags to add to the ticket
+            milestone_id: Optional milestone (ticket of type=milestone) to assign this ticket to.
+            sprint_id: Optional sprint to assign this ticket to.
             **kwargs: Additional parameters
         """
         from datetime import datetime
-        
+
         # Use current date if none provided
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
-        
+
         # The API expects a 'values' parameter containing the ticket data
         values = {
-            "headline": headline, 
+            "headline": headline,
             "projectId": project_id,
             "userId": user_id,
             "date": date,
             **kwargs
         }
-        
+
         # Add tags if provided
         if tags is not None:
             values["tags"] = tags
-        
+        if milestone_id is not None:
+            values["milestoneid"] = milestone_id
+        if sprint_id is not None:
+            values["sprint"] = sprint_id
+
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
     
-    async def update_ticket(self, ticket_id: int, project_id: int, **kwargs) -> dict:
+    async def update_ticket(self, ticket_id: int, project_id: int,
+                            milestone_id: Optional[int] = None,
+                            sprint_id: Optional[int] = None,
+                            **kwargs) -> dict:
         """Update an existing ticket.
-        
+
         Args:
             ticket_id: The ID of the ticket to update
             project_id: The project ID where the ticket belongs
+            milestone_id: Optional milestone (ticket of type=milestone) to assign this ticket to.
+                          Pass 0 to detach from any current milestone.
+            sprint_id: Optional sprint ID to assign this ticket to. Pass 0 to detach.
             **kwargs: Additional parameters to update
         """
         values = {"id": ticket_id, "projectId": project_id, **kwargs}
+        if milestone_id is not None:
+            values["milestoneid"] = milestone_id
+        if sprint_id is not None:
+            values["sprint"] = sprint_id
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.updateTicket", params)
     
@@ -235,6 +255,85 @@ class LeantimeClient:
         params = {"ticketId": ticket_id}
         return await self.call("leantime.rpc.Tickets.Tickets.getAllSubtasks", params)
     
+    async def list_milestones(self, project_id: int, sort_by: str = "standard") -> list:
+        """List all milestones for a project.
+
+        Milestones in Leantime are tickets with type=milestone, so this hits
+        the Tickets module's dedicated milestone endpoint.
+        """
+        params = {
+            "searchCriteria": {"currentProject": project_id},
+            "sortBy": sort_by,
+        }
+        return await self.call("leantime.rpc.Tickets.Tickets.getAllMilestones", params)
+
+    async def create_milestone(self, headline: str, project_id: int, editor_id: int,
+                               edit_from: Optional[str] = None, edit_to: Optional[str] = None,
+                               tags: Optional[str] = None,
+                               dependent_milestone: Optional[int] = None) -> int:
+        """Create a milestone (server-side type=milestone). Returns the new milestone ID.
+
+        editor_id is the Leantime user ID owning the milestone (typically the
+        creator). edit_from / edit_to are the milestone start/end dates in
+        YYYY-MM-DD format and are passed through verbatim.
+
+        quickAddMilestone wraps its fields under an inner 'params' key (a
+        Leantime contract quirk; verified against the running instance).
+        """
+        inner: dict = {
+            "headline": headline,
+            "projectId": project_id,
+            "editorId": editor_id,
+        }
+        if edit_from is not None:
+            inner["editFrom"] = edit_from
+        if edit_to is not None:
+            inner["editTo"] = edit_to
+        if tags is not None:
+            inner["tags"] = tags
+        if dependent_milestone is not None:
+            inner["dependentMilestone"] = dependent_milestone
+        return await self.call("leantime.rpc.Tickets.Tickets.quickAddMilestone", {"params": inner})
+
+    async def update_milestone(self, milestone_id: int, editor_id: int,
+                               headline: Optional[str] = None,
+                               edit_from: Optional[str] = None,
+                               edit_to: Optional[str] = None,
+                               status: Optional[int] = None,
+                               tags: Optional[str] = None) -> dict:
+        """Update a milestone's lightweight fields.
+
+        Leantime's quickUpdateMilestone fails with "Undefined array key" on
+        any field the PHP method touches but the request omits, so this
+        method fetches the milestone first and merges user-supplied fields
+        over the current values. Pass only the fields you want to change.
+
+        editor_id is required by Leantime for activity attribution.
+        """
+        current = await self.get_ticket(milestone_id)
+        if not current:
+            raise ValueError(f"Milestone with ID {milestone_id} not found")
+        inner: dict = {
+            "id": milestone_id,
+            "editorId": editor_id,
+            "headline": headline if headline is not None else current.get("headline", ""),
+            "editFrom": edit_from if edit_from is not None else (current.get("editFrom") or ""),
+            "editTo": edit_to if edit_to is not None else (current.get("editTo") or ""),
+            "tags": tags if tags is not None else (current.get("tags") or ""),
+            "status": status if status is not None else int(current.get("status") or 3),
+            "dependentMilestone": current.get("dependentMilestone") or "",
+        }
+        return await self.call("leantime.rpc.Tickets.Tickets.quickUpdateMilestone", {"params": inner})
+
+    async def delete_milestone(self, milestone_id: int) -> dict:
+        """Delete a milestone by its ticket ID."""
+        return await self.call("leantime.rpc.Tickets.Tickets.deleteMilestone", {"id": milestone_id})
+
+    # Note: leantime.rpc.Tickets.Tickets.getMilestoneProgress is not exposed
+    # as an MCP tool — its PHP signature expects a Milestone model object,
+    # not an int, so the JSON-RPC dispatcher cannot cast a plain integer.
+    # Verified empirically against the running instance.
+
     async def upsert_subtask(self, parent_ticket_id: int, headline: str, date: Optional[str] = None, tags: Optional[str] = None, **kwargs) -> dict:
         """Create or update a subtask.
         

@@ -152,29 +152,43 @@ async def create_ticket(headline: str, project_id: int, user_id: int,
                        status: Optional[int] = None,
                        priority: Optional[str] = None,
                        assignedTo: Optional[int] = None,
-                       tags: Optional[str] = None) -> str:
+                       tags: Optional[str] = None,
+                       milestone_id: Optional[int] = None,
+                       sprint_id: Optional[int] = None) -> str:
     """Create a new ticket.
 
     Args:
         status: Status ID (int) matching one of the IDs returned by get_status_labels.
         assignedTo: User ID (int) to assign the ticket to.
+        milestone_id: Optional milestone (returned by list_milestones) to attach the ticket to.
+        sprint_id: Optional sprint (returned by list_sprints) to attach the ticket to.
     """
     client = get_client()
     result = await client.create_ticket(
         headline=headline, project_id=project_id, user_id=user_id, date=date,
         description=description, status=status, priority=priority,
-        assignedTo=assignedTo, tags=tags
+        assignedTo=assignedTo, tags=tags,
+        milestone_id=milestone_id, sprint_id=sprint_id,
     )
     return json.dumps(result, indent=2)
 
 
 @app.tool()
-async def update_ticket(ticket_id: int, project_id: int, headline: str = None, description: str = None, 
-                       status: int = None, priority: str = None, assignedTo: int = None) -> str:
-    """Update an existing ticket."""
+async def update_ticket(ticket_id: int, project_id: int,
+                       headline: Optional[str] = None,
+                       description: Optional[str] = None,
+                       status: Optional[int] = None,
+                       priority: Optional[str] = None,
+                       assignedTo: Optional[int] = None,
+                       milestone_id: Optional[int] = None,
+                       sprint_id: Optional[int] = None) -> str:
+    """Update an existing ticket.
+
+    Pass milestone_id=0 or sprint_id=0 to detach the ticket from its current
+    milestone or sprint respectively.
+    """
     client = get_client()
-    # Build kwargs from non-None parameters
-    kwargs = {}
+    kwargs: dict = {}
     if headline is not None:
         kwargs['headline'] = headline
     if description is not None:
@@ -185,8 +199,12 @@ async def update_ticket(ticket_id: int, project_id: int, headline: str = None, d
         kwargs['priority'] = priority
     if assignedTo is not None:
         kwargs['assignedTo'] = assignedTo
-    
-    result = await client.update_ticket(ticket_id, project_id, **kwargs)
+
+    result = await client.update_ticket(
+        ticket_id, project_id,
+        milestone_id=milestone_id, sprint_id=sprint_id,
+        **kwargs,
+    )
     return json.dumps(result, indent=2)
 
 
@@ -195,6 +213,73 @@ async def get_status_labels() -> str:
     """Get available status labels."""
     client = get_client()
     result = await client.get_status_labels()
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def list_milestones(project_id: int, sort_by: str = "standard") -> str:
+    """List all milestones for a project.
+
+    Returns the milestone records (Leantime models milestones as tickets with
+    type=milestone) including headlines, dates, status, and progress fields.
+    """
+    client = get_client()
+    result = await client.list_milestones(project_id, sort_by=sort_by)
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def create_milestone(headline: str, project_id: int, editor_id: int,
+                           edit_from: Optional[str] = None,
+                           edit_to: Optional[str] = None,
+                           tags: Optional[str] = None,
+                           dependent_milestone: Optional[int] = None) -> str:
+    """Create a milestone in a project.
+
+    Args:
+        headline: Milestone title.
+        project_id: Project this milestone belongs to.
+        editor_id: User ID owning the milestone (typically the creator).
+        edit_from: Optional start date (YYYY-MM-DD).
+        edit_to: Optional end / due date (YYYY-MM-DD).
+        tags: Optional comma-separated tag list.
+        dependent_milestone: Optional ID of a milestone this one depends on.
+
+    Returns the new milestone ID as a JSON-encoded integer.
+    """
+    client = get_client()
+    result = await client.create_milestone(
+        headline=headline, project_id=project_id, editor_id=editor_id,
+        edit_from=edit_from, edit_to=edit_to, tags=tags,
+        dependent_milestone=dependent_milestone,
+    )
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def update_milestone(milestone_id: int, editor_id: int,
+                           headline: Optional[str] = None,
+                           edit_from: Optional[str] = None,
+                           edit_to: Optional[str] = None,
+                           status: Optional[int] = None,
+                           tags: Optional[str] = None) -> str:
+    """Update a milestone's lightweight fields (headline, dates, status, tags).
+
+    editor_id is required by Leantime for activity attribution.
+    """
+    client = get_client()
+    result = await client.update_milestone(
+        milestone_id=milestone_id, editor_id=editor_id, headline=headline,
+        edit_from=edit_from, edit_to=edit_to, status=status, tags=tags,
+    )
+    return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def delete_milestone(milestone_id: int) -> str:
+    """Delete a milestone by its ID."""
+    client = get_client()
+    result = await client.delete_milestone(milestone_id)
     return json.dumps(result, indent=2)
 
 
