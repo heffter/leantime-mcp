@@ -46,7 +46,8 @@ COPY --from=builder --chown=app:app /app/src /app/src
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    LOG_LEVEL=INFO
+    LOG_LEVEL=INFO \
+    FASTMCP_CHECK_FOR_UPDATES=off
 
 USER app
 EXPOSE 8000
