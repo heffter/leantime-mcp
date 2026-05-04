@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 from dotenv import load_dotenv
 
 from fastmcp import FastMCP
@@ -146,9 +146,13 @@ async def list_tickets(project_id: int = None) -> str:
 
 
 @app.tool()
-async def create_ticket(headline: str, project_id: int, user_id: int, date: str = None,
-                       description: str = None, status: int = None, priority: str = None,
-                       assignedTo: int = None, tags: str = None) -> str:
+async def create_ticket(headline: str, project_id: int, user_id: int,
+                       date: Optional[str] = None,
+                       description: Optional[str] = None,
+                       status: Optional[int] = None,
+                       priority: Optional[str] = None,
+                       assignedTo: Optional[int] = None,
+                       tags: Optional[str] = None) -> str:
     """Create a new ticket.
 
     Args:
@@ -262,9 +266,18 @@ async def get_all_subtasks(ticket_id: int) -> str:
 
 @app.tool()
 async def upsert_subtask(parent_ticket: int, headline: str,
-                        date: str = None, description: str = None, status: str = None,
-                        priority: str = None, assignedTo: str = None, tags: str = None) -> str:
-    """Create or update a subtask."""
+                        date: Optional[str] = None,
+                        description: Optional[str] = None,
+                        status: Optional[int] = None,
+                        priority: Optional[str] = None,
+                        assignedTo: Optional[int] = None,
+                        tags: Optional[str] = None) -> str:
+    """Create or update a subtask.
+
+    Args:
+        status: Status ID (int) matching one of the IDs returned by get_status_labels.
+        assignedTo: User ID (int) to assign the subtask to.
+    """
     client = get_client()
     result = await client.upsert_subtask(
         parent_ticket_id=parent_ticket, headline=headline,
