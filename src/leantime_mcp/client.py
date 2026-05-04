@@ -109,6 +109,57 @@ class LeantimeClient:
             params["details"] = details
         return await self.call("leantime.rpc.Projects.addProject", params)
     
+    async def edit_project(self, project_id: int, values: dict) -> Any:
+        """Update an existing project's metadata.
+
+        `values` is a free-form dict; common keys are name, details (description),
+        clientId, state (status), type, hourBudget, dollarBudget.
+        """
+        return await self.call(
+            "leantime.rpc.Projects.editProject",
+            {"id": project_id, "values": values},
+        )
+
+    async def patch_project(self, project_id: int, params: dict) -> bool:
+        """Partial-update a project: only fields present in params are written."""
+        return await self.call(
+            "leantime.rpc.Projects.patch",
+            {"id": project_id, "params": params},
+        )
+
+    async def duplicate_project(self, project_id: int, client_id: int,
+                                project_name: str, user_start_date: Optional[str] = None,
+                                assign_same_users: bool = True) -> Any:
+        """Deep-clone a project (tickets, milestones, canvases) into a new project."""
+        params: dict = {
+            "projectId": project_id,
+            "clientId": client_id,
+            "projectName": project_name,
+            "assignSameUsers": assign_same_users,
+        }
+        if user_start_date is not None:
+            params["userStartDate"] = user_start_date
+        return await self.call("leantime.rpc.Projects.duplicateProject", params)
+
+    async def get_project_progress(self, project_id: int) -> Any:
+        """Return overall progress data for a project."""
+        return await self.call("leantime.rpc.Projects.getProjectProgress", {"projectId": project_id})
+
+    async def get_users_assigned_to_project(self, project_id: int,
+                                            team_only: bool = False) -> list:
+        """List users assigned to a project. team_only=True excludes clients."""
+        return await self.call(
+            "leantime.rpc.Projects.getUsersAssignedToProject",
+            {"projectId": project_id, "teamOnly": team_only},
+        )
+
+    async def edit_user_project_relations(self, user_id: int, project_ids: list) -> bool:
+        """Replace the full set of projects a user is assigned to."""
+        return await self.call(
+            "leantime.rpc.Projects.editUserProjectRelations",
+            {"id": user_id, "projects": project_ids},
+        )
+
     async def get_ticket(self, ticket_id: int) -> dict:
         """Get ticket details by ID."""
         return await self.call("leantime.rpc.Tickets.Tickets.getTicket", {"id": ticket_id})
@@ -186,6 +237,68 @@ class LeantimeClient:
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.updateTicket", params)
     
+    async def delete_ticket(self, ticket_id: int) -> Any:
+        """Delete a ticket by ID.
+
+        Note: the underlying RPC method is `delete` (not `deleteTicket`).
+        Subtasks are tickets too, so this also handles subtask removal.
+        """
+        return await self.call("leantime.rpc.Tickets.Tickets.delete", {"id": ticket_id})
+
+    async def patch_ticket(self, ticket_id: int, params: dict) -> bool:
+        """Partial-update a ticket: only fields present in params are written.
+
+        Strips framework-internal keys server-side. Useful for narrow edits
+        like just changing the status without resending the full ticket.
+        """
+        return await self.call(
+            "leantime.rpc.Tickets.Tickets.patch",
+            {"id": ticket_id, "params": params},
+        )
+
+    async def quick_create_ticket(self, headline: str, project_id: int, editor_id: int,
+                                  description: Optional[str] = None,
+                                  ticket_type: str = "task",
+                                  status: Optional[int] = None,
+                                  storypoints: Optional[int] = None,
+                                  plan_hours: Optional[int] = None,
+                                  sprint: Optional[int] = None,
+                                  priority: Optional[int] = None,
+                                  date_to_finish: Optional[str] = None) -> Any:
+        """Lightweight ticket creation with a reduced field set.
+
+        Like the quick* milestone helpers, quickAddTicket wraps its fields
+        under an inner 'params' key (Leantime contract quirk).
+        """
+        inner: dict = {
+            "headline": headline,
+            "type": ticket_type,
+            "projectId": project_id,
+            "editorId": editor_id,
+        }
+        if description is not None:
+            inner["description"] = description
+        if status is not None:
+            inner["status"] = status
+        if storypoints is not None:
+            inner["storypoints"] = storypoints
+        if plan_hours is not None:
+            inner["planHours"] = plan_hours
+        if sprint is not None:
+            inner["sprint"] = sprint
+        if priority is not None:
+            inner["priority"] = priority
+        if date_to_finish is not None:
+            inner["dateToFinish"] = date_to_finish
+        return await self.call("leantime.rpc.Tickets.Tickets.quickAddTicket", {"params": inner})
+
+    async def move_ticket(self, ticket_id: int, project_id: int) -> bool:
+        """Move a ticket (and milestone children if applicable) to a different project."""
+        return await self.call(
+            "leantime.rpc.Tickets.Tickets.moveTicket",
+            {"id": ticket_id, "projectId": project_id},
+        )
+
     async def get_status_labels(self) -> dict:
         """Get all available ticket status labels with their IDs.
         
@@ -206,20 +319,100 @@ class LeantimeClient:
         """Get user details by email address."""
         return await self.call("leantime.rpc.Users.Users.getUserByEmail", {"email": email})
     
-    async def add_comment(self, module: str, module_id: int, comment: str) -> dict:
-        """Add a comment to a module (e.g., ticket, project)."""
+    async def create_user(self, firstname: str, lastname: str, username: str,
+                          password: str, role: str = "20",
+                          phone: Optional[str] = None,
+                          client_id: Optional[int] = None,
+                          status: str = "a",
+                          job_title: Optional[str] = None,
+                          job_level: Optional[str] = None,
+                          department: Optional[str] = None) -> Any:
+        """Create a new user account. Admin-only at runtime.
+
+        role is a Leantime role string ('10' developer, '20' editor,
+        '30' commenter, '40' admin, '50' owner). status is 'a' active or
+        'i' inactive. username is the email address used to log in.
+        """
+        params: dict = {
+            "firstname": firstname,
+            "lastname": lastname,
+            "username": username,
+            "password": password,
+            "role": role,
+            "status": status,
+        }
+        if phone is not None:
+            params["phone"] = phone
+        if client_id is not None:
+            params["clientId"] = client_id
+        if job_title is not None:
+            params["jobTitle"] = job_title
+        if job_level is not None:
+            params["jobLevel"] = job_level
+        if department is not None:
+            params["department"] = department
+        return await self.call("leantime.rpc.Users.addUser", params)
+
+    async def update_user(self, user_id: int, values: dict) -> bool:
+        """Update an existing user's profile fields. Admin-only at runtime."""
+        return await self.call(
+            "leantime.rpc.Users.editUser",
+            {"id": user_id, "values": values},
+        )
+
+    async def delete_user(self, user_id: int) -> bool:
+        """Delete a user and remove all project relations. Admin-only at runtime."""
+        return await self.call("leantime.rpc.Users.deleteUser", {"id": user_id})
+
+    # Comments
+
+    async def add_comment(self, module: str, entity_id: int, text: str,
+                          father: Optional[int] = None,
+                          entity_headline: Optional[str] = None) -> Any:
+        """Add a comment to a Leantime entity (typically a ticket or project).
+
+        Uses the Leantime 3.x API shape (entityId + values:{text}). The
+        `entity` parameter is a small dict the server uses to compose
+        notification subject lines.
+
+        IMPORTANT: Leantime's addComment validates `isset($values['father'])`
+        - the key must be present even for top-level (non-reply) comments.
+        We always include it, defaulting to 0 when no parent is specified.
+        Returning [false] from the upstream method usually means this key
+        was missing or the comment text was empty after validation.
+        """
+        values: dict = {"text": text, "father": father if father is not None else 0}
+        entity = {"type": module, "id": entity_id}
+        if entity_headline is not None:
+            entity["headline"] = entity_headline
         params = {
+            "values": values,
             "module": module,
-            "moduleId": module_id,
-            "comment": comment
+            "entityId": entity_id,
+            "entity": entity,
         }
         return await self.call("leantime.rpc.Comments.addComment", params)
-    
-    async def get_comments(self, module: str, module_id: int) -> list:
-        """Get comments for a module."""
+
+    async def update_comment(self, comment_id: int, text: str) -> bool:
+        """Update an existing comment's text."""
+        return await self.call(
+            "leantime.rpc.Comments.editComment",
+            {"id": comment_id, "values": {"text": text}},
+        )
+
+    async def delete_comment(self, comment_id: int) -> bool:
+        """Delete a comment by ID."""
+        return await self.call("leantime.rpc.Comments.deleteComment", {"commentId": comment_id})
+
+    async def get_comments(self, module: str, entity_id: int) -> list:
+        """Get comments for a module entity (ticket / project / etc.).
+
+        The Leantime 3.x API uses `entityId` (was `moduleId` on older
+        versions); current Leantime rejects `moduleId` with -32602.
+        """
         params = {
             "module": module,
-            "moduleId": module_id
+            "entityId": entity_id,
         }
         return await self.call("leantime.rpc.Comments.getComments", params)
     
@@ -233,15 +426,61 @@ class LeantimeClient:
             **kwargs
         }
         return await self.call("leantime.rpc.Timesheets.addTime", params)
+
+    async def upsert_timesheet(self, ticket_id: int, user_id: int, date: str,
+                               hours: float, kind: str = "GENERAL_BILLABLE",
+                               description: Optional[str] = None) -> Any:
+        """Create or update a time entry for a ticket on a specific date.
+
+        Replaces the older addTime / logTime pattern. kind is one of the
+        Leantime time kinds (default 'GENERAL_BILLABLE').
+        """
+        inner: dict = {
+            "userId": user_id,
+            "date": date,
+            "kind": kind,
+            "hours": hours,
+        }
+        if description is not None:
+            inner["description"] = description
+        return await self.call(
+            "leantime.rpc.Timesheets.upsertTime",
+            {"ticketId": ticket_id, "params": inner},
+        )
+
+    async def delete_timesheet(self, timesheet_id: int) -> Any:
+        """Delete a time entry by ID."""
+        return await self.call("leantime.rpc.Timesheets.deleteTime", {"id": timesheet_id})
     
-    async def get_timesheets(self, project_id: Optional[int] = None, user_id: Optional[int] = None) -> list:
-        """Get timesheet entries."""
-        params = {}
-        if project_id:
+    async def get_timesheets(self, project_id: Optional[int] = None,
+                             user_id: Optional[int] = None) -> list:
+        """List recent timesheet entries (poll-style).
+
+        Leantime 3.x does NOT expose a generic "list all timesheets"
+        RPC method - the underlying `getAll` and `getWeeklyTimesheets`
+        accept Carbon date objects that JSON-RPC cannot construct. The
+        only callable list endpoints are the change-detection polls
+        `pollForNewTimesheets` and `pollForUpdatedTimesheets`. This
+        method calls the former, which returns recently-created entries.
+
+        For full enumeration, use the Leantime web UI's Timesheets view.
+        """
+        params: dict = {}
+        if project_id is not None:
             params["projectId"] = project_id
-        if user_id:
+        if user_id is not None:
             params["userId"] = user_id
-        return await self.call("leantime.rpc.Timesheets.getTimesheets", params)
+        return await self.call("leantime.rpc.Timesheets.pollForNewTimesheets", params)
+
+    async def poll_updated_timesheets(self, project_id: Optional[int] = None,
+                                      user_id: Optional[int] = None) -> list:
+        """Poll for recently-modified timesheet entries."""
+        params: dict = {}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if user_id is not None:
+            params["userId"] = user_id
+        return await self.call("leantime.rpc.Timesheets.pollForUpdatedTimesheets", params)
     
     async def get_all_subtasks(self, ticket_id: int) -> list:
         """Get all subtasks for a ticket.
@@ -351,6 +590,14 @@ class LeantimeClient:
     async def list_future_sprints(self, project_id: int) -> Any:
         """List all future (not yet started) sprints for a project."""
         return await self.call("leantime.rpc.Sprints.Sprints.getAllFutureSprints", {"projectId": project_id})
+
+    async def get_upcoming_sprint(self, project_id: int) -> Any:
+        """Return the next scheduled sprint for a project."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getUpcomingSprint", {"projectId": project_id})
+
+    async def get_sprint_cumulative_report(self, project_id: int) -> Any:
+        """Return cumulative-flow report data for a project's sprints."""
+        return await self.call("leantime.rpc.Sprints.Sprints.getCummulativeReport", {"project": project_id})
 
     async def create_sprint(self, name: str, project_id: int, start_date: str, end_date: str) -> Any:
         """Create a new sprint. Returns the new sprint ID or false."""

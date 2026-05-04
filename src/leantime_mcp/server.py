@@ -114,6 +114,70 @@ async def get_project(project_id: int) -> str:
 
 
 @app.tool()
+async def edit_project(project_id: int, values: dict) -> str:
+    """Update an existing project's metadata.
+
+    `values` is a dict of fields to update; common keys: name, details
+    (description), clientId, state, type, hourBudget, dollarBudget.
+    """
+    client = get_client()
+    return json.dumps(await client.edit_project(project_id, values), indent=2)
+
+
+@app.tool()
+async def patch_project(project_id: int, params: dict) -> str:
+    """Partial-update a project: only fields present in params are written."""
+    client = get_client()
+    return json.dumps(await client.patch_project(project_id, params), indent=2)
+
+
+@app.tool()
+async def duplicate_project(project_id: int, client_id: int, project_name: str,
+                            user_start_date: Optional[str] = None,
+                            assign_same_users: bool = True) -> str:
+    """Deep-clone a project (tickets, milestones, canvases) into a new project.
+
+    Comments, files, and timesheets are NOT copied (Leantime contract).
+    Returns the new project ID on success.
+    """
+    client = get_client()
+    return json.dumps(
+        await client.duplicate_project(
+            project_id, client_id, project_name,
+            user_start_date=user_start_date, assign_same_users=assign_same_users,
+        ),
+        indent=2,
+    )
+
+
+@app.tool()
+async def get_project_progress(project_id: int) -> str:
+    """Return overall progress data (percent / counters) for a project."""
+    client = get_client()
+    return json.dumps(await client.get_project_progress(project_id), indent=2)
+
+
+@app.tool()
+async def get_users_assigned_to_project(project_id: int, team_only: bool = False) -> str:
+    """List users assigned to a project. team_only=True excludes clients."""
+    client = get_client()
+    return json.dumps(
+        await client.get_users_assigned_to_project(project_id, team_only=team_only),
+        indent=2,
+    )
+
+
+@app.tool()
+async def edit_user_project_relations(user_id: int, project_ids: list) -> str:
+    """Replace the full set of projects a user is assigned to."""
+    client = get_client()
+    return json.dumps(
+        await client.edit_user_project_relations(user_id, project_ids),
+        indent=2,
+    )
+
+
+@app.tool()
 async def list_projects() -> str:
     """List all projects accessible to the user."""
     client = get_client()
@@ -206,6 +270,57 @@ async def update_ticket(ticket_id: int, project_id: int,
         **kwargs,
     )
     return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def delete_ticket(ticket_id: int) -> str:
+    """Delete a ticket by ID. Subtasks are tickets too, so this removes them as well."""
+    client = get_client()
+    return json.dumps(await client.delete_ticket(ticket_id), indent=2)
+
+
+@app.tool()
+async def patch_ticket(ticket_id: int, params: dict) -> str:
+    """Partial-update a ticket: only fields present in params are written.
+
+    Useful for narrow edits like just changing status or just reassigning
+    a ticket without resending the entire payload.
+    """
+    client = get_client()
+    return json.dumps(await client.patch_ticket(ticket_id, params), indent=2)
+
+
+@app.tool()
+async def quick_create_ticket(headline: str, project_id: int, editor_id: int,
+                              description: Optional[str] = None,
+                              ticket_type: str = "task",
+                              status: Optional[int] = None,
+                              storypoints: Optional[int] = None,
+                              plan_hours: Optional[int] = None,
+                              sprint: Optional[int] = None,
+                              priority: Optional[int] = None,
+                              date_to_finish: Optional[str] = None) -> str:
+    """Lightweight ticket creation with a reduced field set.
+
+    Use create_ticket for the full surface (tags, milestone_id, etc.).
+    """
+    client = get_client()
+    return json.dumps(
+        await client.quick_create_ticket(
+            headline=headline, project_id=project_id, editor_id=editor_id,
+            description=description, ticket_type=ticket_type, status=status,
+            storypoints=storypoints, plan_hours=plan_hours, sprint=sprint,
+            priority=priority, date_to_finish=date_to_finish,
+        ),
+        indent=2,
+    )
+
+
+@app.tool()
+async def move_ticket(ticket_id: int, project_id: int) -> str:
+    """Move a ticket (and milestone children if any) to a different project."""
+    client = get_client()
+    return json.dumps(await client.move_ticket(ticket_id, project_id), indent=2)
 
 
 @app.tool()
@@ -308,18 +423,97 @@ async def get_user_by_email(email: str) -> str:
 
 
 @app.tool()
-async def add_comment(module: str, module_id: int, comment: str) -> str:
-    """Add a comment to a module (ticket, project, etc.)."""
+async def create_user(firstname: str, lastname: str, username: str,
+                      password: str,
+                      role: str = "20",
+                      phone: Optional[str] = None,
+                      client_id: Optional[int] = None,
+                      status: str = "a",
+                      job_title: Optional[str] = None,
+                      job_level: Optional[str] = None,
+                      department: Optional[str] = None) -> str:
+    """Create a new Leantime user. Requires admin privileges.
+
+    Args:
+        username: The user's email address (used to log in).
+        role: '10' developer, '20' editor (default), '30' commenter,
+              '40' admin, '50' owner.
+        status: 'a' active (default) or 'i' inactive.
+    """
     client = get_client()
-    result = await client.add_comment(module=module, module_id=module_id, comment=comment)
+    return json.dumps(
+        await client.create_user(
+            firstname=firstname, lastname=lastname, username=username,
+            password=password, role=role, phone=phone, client_id=client_id,
+            status=status, job_title=job_title, job_level=job_level,
+            department=department,
+        ),
+        indent=2,
+    )
+
+
+@app.tool()
+async def update_user(user_id: int, values: dict) -> str:
+    """Update a user's profile. `values` is a dict of fields to change.
+    Common keys: firstname, lastname, username, phone, jobTitle, jobLevel,
+    department, role, status. Requires admin privileges.
+    """
+    client = get_client()
+    return json.dumps(await client.update_user(user_id, values), indent=2)
+
+
+@app.tool()
+async def delete_user(user_id: int) -> str:
+    """Delete a user and remove all project relations. Requires admin privileges."""
+    client = get_client()
+    return json.dumps(await client.delete_user(user_id), indent=2)
+
+
+@app.tool()
+async def add_comment(module: str, entity_id: int, text: str,
+                      father: Optional[int] = None,
+                      entity_headline: Optional[str] = None) -> str:
+    """Add a comment to a Leantime entity.
+
+    Args:
+        module: Entity type, typically "ticket" or "project".
+        entity_id: ID of the entity to comment on.
+        text: Comment body. HTML allowed (Leantime sanitizes server-side).
+        father: Optional parent comment ID for threaded replies.
+        entity_headline: Optional headline of the parent entity, used by
+            Leantime to compose notification email subjects.
+
+    NOTE: Parameter renamed from module_id to entity_id to match the
+    Leantime 3.x API contract (the previous `moduleId` shape was incorrect
+    on current Leantime versions).
+    """
+    client = get_client()
+    result = await client.add_comment(
+        module=module, entity_id=entity_id, text=text,
+        father=father, entity_headline=entity_headline,
+    )
     return json.dumps(result, indent=2)
 
 
 @app.tool()
-async def get_comments(module: str, module_id: int) -> str:
-    """Get comments for a module (ticket, project, etc.)."""
+async def update_comment(comment_id: int, text: str) -> str:
+    """Update an existing comment's text."""
     client = get_client()
-    result = await client.get_comments(module=module, module_id=module_id)
+    return json.dumps(await client.update_comment(comment_id, text), indent=2)
+
+
+@app.tool()
+async def delete_comment(comment_id: int) -> str:
+    """Delete a comment by ID."""
+    client = get_client()
+    return json.dumps(await client.delete_comment(comment_id), indent=2)
+
+
+@app.tool()
+async def get_comments(module: str, entity_id: int) -> str:
+    """Get comments for a Leantime entity (ticket, project, etc.)."""
+    client = get_client()
+    result = await client.get_comments(module=module, entity_id=entity_id)
     return json.dumps(result, indent=2)
 
 
@@ -334,11 +528,55 @@ async def add_timesheet(user_id: int, ticket_id: int, hours: float, date: str, d
 
 
 @app.tool()
-async def get_timesheets(project_id: int = None, user_id: int = None) -> str:
-    """Get timesheets, optionally filtered by project or user."""
+async def get_timesheets(project_id: Optional[int] = None,
+                         user_id: Optional[int] = None) -> str:
+    """List recent timesheet entries (poll-style, recently created).
+
+    Leantime 3.x does not expose a generic "list all timesheets" RPC
+    method (the underlying getAll signature requires Carbon date objects
+    that JSON-RPC cannot construct). Use poll_updated_timesheets for
+    recently-modified entries, or the Leantime web UI for full browsing.
+    """
     client = get_client()
     result = await client.get_timesheets(project_id=project_id, user_id=user_id)
     return json.dumps(result, indent=2)
+
+
+@app.tool()
+async def poll_updated_timesheets(project_id: Optional[int] = None,
+                                  user_id: Optional[int] = None) -> str:
+    """Poll for recently-modified timesheet entries."""
+    client = get_client()
+    return json.dumps(
+        await client.poll_updated_timesheets(project_id=project_id, user_id=user_id),
+        indent=2,
+    )
+
+
+@app.tool()
+async def upsert_timesheet(ticket_id: int, user_id: int, date: str, hours: float,
+                           kind: str = "GENERAL_BILLABLE",
+                           description: Optional[str] = None) -> str:
+    """Create or update a time entry for a ticket on a specific date.
+
+    Replaces the older add_timesheet path; idempotent for (ticket, user,
+    date) so re-running with new hours updates rather than appending.
+    """
+    client = get_client()
+    return json.dumps(
+        await client.upsert_timesheet(
+            ticket_id=ticket_id, user_id=user_id, date=date, hours=hours,
+            kind=kind, description=description,
+        ),
+        indent=2,
+    )
+
+
+@app.tool()
+async def delete_timesheet(timesheet_id: int) -> str:
+    """Delete a time entry by ID."""
+    client = get_client()
+    return json.dumps(await client.delete_timesheet(timesheet_id), indent=2)
 
 
 @app.tool()
@@ -400,6 +638,20 @@ async def list_future_sprints(project_id: int) -> str:
     """List all future (not-yet-started) sprints for a project."""
     client = get_client()
     return json.dumps(await client.list_future_sprints(project_id), indent=2)
+
+
+@app.tool()
+async def get_upcoming_sprint(project_id: int) -> str:
+    """Return the next scheduled sprint for a project."""
+    client = get_client()
+    return json.dumps(await client.get_upcoming_sprint(project_id), indent=2)
+
+
+@app.tool()
+async def get_sprint_cumulative_report(project_id: int) -> str:
+    """Return cumulative-flow report data for a project's sprints."""
+    client = get_client()
+    return json.dumps(await client.get_sprint_cumulative_report(project_id), indent=2)
 
 
 @app.tool()
