@@ -699,6 +699,7 @@ async def create_goal(title: str, project_id: int, board_id: int,
                       current_value: Optional[float] = None,
                       start_value: Optional[float] = None,
                       end_value: Optional[float] = None,
+                      metric_type: Optional[str] = None,
                       assigned_to: Optional[int] = None,
                       parent: Optional[int] = None) -> str:
     """Create a goal on a Goalcanvas board.
@@ -710,6 +711,8 @@ async def create_goal(title: str, project_id: int, board_id: int,
         description: Optional long-form description.
         current_value / start_value / end_value: Optional metric tracking
             fields for progress calculation.
+        metric_type: Optional Leantime metric type string (e.g. "number",
+            "percentage", "currency"); affects how progress is rendered.
         assigned_to: Optional user ID to assign the goal to.
         parent: Optional parent goal ID (for KPI hierarchies).
     """
@@ -726,6 +729,8 @@ async def create_goal(title: str, project_id: int, board_id: int,
         values["startValue"] = start_value
     if end_value is not None:
         values["endValue"] = end_value
+    if metric_type is not None:
+        values["metricType"] = metric_type
     if assigned_to is not None:
         values["assignedTo"] = assigned_to
     if parent is not None:

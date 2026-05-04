@@ -332,8 +332,12 @@ class LeantimeClient:
         role is a Leantime role string ('10' developer, '20' editor,
         '30' commenter, '40' admin, '50' owner). status is 'a' active or
         'i' inactive. username is the email address used to log in.
+
+        Leantime's addUser expects fields under a 'values' key (matching
+        editUser's contract); flat params return -32602 'Required Parameter
+        Missing: values'.
         """
-        params: dict = {
+        values: dict = {
             "firstname": firstname,
             "lastname": lastname,
             "username": username,
@@ -342,22 +346,51 @@ class LeantimeClient:
             "status": status,
         }
         if phone is not None:
-            params["phone"] = phone
+            values["phone"] = phone
         if client_id is not None:
-            params["clientId"] = client_id
+            values["clientId"] = client_id
         if job_title is not None:
-            params["jobTitle"] = job_title
+            values["jobTitle"] = job_title
         if job_level is not None:
-            params["jobLevel"] = job_level
+            values["jobLevel"] = job_level
         if department is not None:
-            params["department"] = department
-        return await self.call("leantime.rpc.Users.addUser", params)
+            values["department"] = department
+        return await self.call("leantime.rpc.Users.addUser", {"values": values})
 
     async def update_user(self, user_id: int, values: dict) -> bool:
-        """Update an existing user's profile fields. Admin-only at runtime."""
+        """Update an existing user's profile fields. Admin-only at runtime.
+
+        Leantime's editUser repository code reads `firstname`, `lastname`,
+        `user`, `status`, `role`, and `clientId` from the values dict
+        without an isset() guard, so omitting any of them produces an
+        "Undefined array key" server error. It also uses the awkward key
+        `user` (not `username`) for the email address.
+
+        To preserve a "pass only the fields you want to change" UX, this
+        method fetches the current user record first and merges the
+        caller's values over the current state, including the username
+        field renamed to `user` for the editUser contract.
+        """
+        current = await self.get_user(user_id)
+        if not current:
+            raise ValueError(f"User with ID {user_id} not found")
+        merged: dict = {
+            "firstname": values.get("firstname", current.get("firstname", "")),
+            "lastname": values.get("lastname", current.get("lastname", "")),
+            "user": values.get("user", values.get("username", current.get("username", ""))),
+            "status": values.get("status", current.get("status", "a")),
+            "role": values.get("role", current.get("role", "20")),
+            "clientId": values.get("clientId", current.get("clientId") or 0),
+        }
+        for opt in ("phone", "jobTitle", "jobLevel", "department",
+                    "hours", "wage", "password"):
+            if opt in values:
+                merged[opt] = values[opt]
+            elif current.get(opt) is not None:
+                merged[opt] = current[opt]
         return await self.call(
             "leantime.rpc.Users.editUser",
-            {"id": user_id, "values": values},
+            {"id": user_id, "values": merged},
         )
 
     async def delete_user(self, user_id: int) -> bool:
@@ -371,9 +404,11 @@ class LeantimeClient:
                           entity_headline: Optional[str] = None) -> Any:
         """Add a comment to a Leantime entity (typically a ticket or project).
 
-        Uses the Leantime 3.x API shape (entityId + values:{text}). The
-        `entity` parameter is a small dict the server uses to compose
-        notification subject lines.
+        Uses the Leantime 3.x API shape (entityId + values:{text}).
+        Internally, this method synthesises Leantime's expected `entity`
+        wire-level argument from `module`, `entity_id`, and the optional
+        `entity_headline` (used by the server to compose notification
+        email subjects).
 
         IMPORTANT: Leantime's addComment validates `isset($values['father'])`
         - the key must be present even for top-level (non-reply) comments.
@@ -552,6 +587,14 @@ class LeantimeClient:
         current = await self.get_ticket(milestone_id)
         if not current:
             raise ValueError(f"Milestone with ID {milestone_id} not found")
+        # Status fallback uses an explicit None check instead of `or 3`
+        # because Leantime status IDs are integers and could include 0;
+        # the truthy form would silently rewrite a stored 0 to 3.
+        if status is not None:
+            resolved_status = status
+        else:
+            cur_status = current.get("status")
+            resolved_status = int(cur_status) if cur_status is not None else 3
         inner: dict = {
             "id": milestone_id,
             "editorId": editor_id,
@@ -559,7 +602,7 @@ class LeantimeClient:
             "editFrom": edit_from if edit_from is not None else (current.get("editFrom") or ""),
             "editTo": edit_to if edit_to is not None else (current.get("editTo") or ""),
             "tags": tags if tags is not None else (current.get("tags") or ""),
-            "status": status if status is not None else int(current.get("status") or 3),
+            "status": resolved_status,
             "dependentMilestone": current.get("dependentMilestone") or "",
         }
         return await self.call("leantime.rpc.Tickets.Tickets.quickUpdateMilestone", {"params": inner})
