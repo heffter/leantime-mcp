@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from leantime_mcp.client import LeantimeClient, LeantimeAPIError
+from leantime_mcp.version import get_build_info
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,32 @@ async def health(_request: Request) -> JSONResponse:
     crashed container from an upstream Leantime outage.
     """
     return JSONResponse({"status": "ok"})
+
+
+@app.custom_route("/version", methods=["GET"], include_in_schema=False)
+async def version(_request: Request) -> JSONResponse:
+    """Return build-identity info as JSON over plain HTTP.
+
+    Same payload as the `get_version` MCP tool, but reachable without an
+    MCP client (handy for external monitoring and "is this the right
+    image?" smoke checks against the deployed instance).
+    """
+    return JSONResponse(get_build_info())
+
+
+@app.tool()
+async def get_version() -> str:
+    """Return the running server's package version, git commit, and build date.
+
+    Use this to verify a deployment picked up the latest commit. Compare
+    the returned `git_commit` against `git rev-parse HEAD` in your local
+    fork checkout - if they match, the container is on the expected
+    code. Build-time info (`git_commit`, `git_commit_date`, `build_date`)
+    is baked in by the Dockerfile at image build time; falls back to the
+    local .git directory when run outside Docker, or "unknown" if neither
+    is available.
+    """
+    return json.dumps(get_build_info(), indent=2)
 
 
 @app.tool()

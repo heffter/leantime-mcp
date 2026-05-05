@@ -43,11 +43,31 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 
+# Build identity: passed by docker-compose / docker build --build-arg.
+# Defaults to "unknown" so a plain `docker build` still produces a usable
+# image; populate via the wrapper invocation:
+#   GIT_COMMIT=$(git rev-parse HEAD) \
+#   GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD) \
+#   BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+#   docker compose up -d --build
+ARG GIT_COMMIT=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG BUILD_DATE=unknown
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     LOG_LEVEL=INFO \
-    FASTMCP_CHECK_FOR_UPDATES=off
+    FASTMCP_CHECK_FOR_UPDATES=off \
+    GIT_COMMIT=$GIT_COMMIT \
+    GIT_COMMIT_DATE=$GIT_COMMIT_DATE \
+    BUILD_DATE=$BUILD_DATE
+
+# Standard OCI image labels for the same info — visible via `docker inspect`.
+LABEL org.opencontainers.image.title="leantime-mcp" \
+      org.opencontainers.image.source="https://github.com/heffter/leantime-mcp" \
+      org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.created=$BUILD_DATE
 
 USER app
 EXPOSE 8000

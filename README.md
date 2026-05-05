@@ -156,7 +156,11 @@ This is a pure liveness probe. It does **not** contact Leantime, so it stays gre
 
 ## Available Tools
 
-The server exposes 59 MCP tools spanning the Leantime domains below, plus a non-tool `GET /health` route documented in [Health endpoint](#health-endpoint). Each tool's docstring is the canonical reference; this list is the index.
+The server exposes 60 MCP tools spanning the Leantime domains below, plus two non-tool HTTP routes (`GET /health` and `GET /version` — see [Health endpoint](#health-endpoint) and [Versioning](#versioning-and-is-this-the-latest-binary-check)). Each tool's docstring is the canonical reference; this list is the index.
+
+**Diagnostics**
+
+- `get_version` - return package version, git commit, build date, and runtime versions for "is the right binary deployed?" checks
 
 **Projects**
 
@@ -274,18 +278,39 @@ The container only ever calls `LEANTIME_URL`; everything else (the MCP endpoint 
 cp .env.example .env
 $EDITOR .env       # set LEANTIME_URL, LEANTIME_API_KEY, LEANTIME_USER_EMAIL, LOG_LEVEL
 
-# 2. Build and start
-docker compose up -d --build
+# 2. Build and start (use the wrapper so version info gets baked in)
+./scripts/build-and-deploy.sh
 
-# 3. Verify
+# 3. Verify liveness and identity
 curl http://leantime.mcp.home.lan:8000/health
 # -> {"status":"ok"}
+curl http://leantime.mcp.home.lan:8000/version
+# -> {"package_version":"1.0.0","git_commit":"...","build_date":"...",...}
 
 # 4. Logs
 docker compose logs -f leantime-mcp
 ```
 
 The MCP endpoint is then available at `http://leantime.mcp.home.lan:8000/mcp` for clients that support `streamableHttp`.
+
+### Versioning and "is this the latest binary?" check
+
+The image bakes in three pieces of identity at build time: the package version (`1.0.0`, bumped manually on meaningful releases — see `pyproject.toml`), the git commit it was built from, and a UTC build timestamp. They are exposed three ways:
+
+- The `get_version` MCP tool — call it from any MCP client to get a JSON dict with `package_version`, `git_commit`, `git_commit_short`, `git_commit_date`, `build_date`, plus the runtime `python_version` / `fastmcp_version` / `mcp_version` / `platform`.
+- The `GET /version` HTTP endpoint — same payload over plain HTTP, useful for external monitoring or scripting without an MCP client.
+- Standard OCI image labels (`org.opencontainers.image.revision`, `.created`, `.source`, `.title`) — visible via `docker inspect leantime-mcp:local --format '{{json .Config.Labels}}'`.
+
+To check whether your deployed container is on the commit you expect:
+
+```bash
+# Container's view
+curl -fsSk -u user:pass https://leantime.mcp.home.lan/version | jq -r .git_commit
+# Local checkout's view (run on the host where you built the image)
+git rev-parse HEAD
+```
+
+Match -> deployed. Mismatch -> rebuild with `./scripts/build-and-deploy.sh` (which forwards `GIT_COMMIT`/`GIT_COMMIT_DATE`/`BUILD_DATE` to the build via compose args). A plain `docker compose build` without the wrapper produces an image that reports `git_commit: "unknown"` because the build context can't introspect git on its own — the wrapper's only job is to set those env vars before invoking compose.
 
 ### Troubleshooting: LAN-local hostnames fail to resolve inside the container
 

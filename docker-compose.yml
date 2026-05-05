@@ -20,6 +20,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Forward the build identity so get_version inside the running
+        # container can report it. If you don't export these, the image
+        # will report "unknown" - run with the wrapper invocation in the
+        # README's Deployment section to populate them automatically.
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     image: leantime-mcp:local
     container_name: leantime-mcp
     env_file:
