@@ -110,14 +110,42 @@ class LeantimeClient:
         return await self.call("leantime.rpc.Projects.addProject", params)
     
     async def edit_project(self, project_id: int, values: dict) -> Any:
-        """Update an existing project's metadata.
+        """Update an existing project's metadata, preserving unspecified fields.
 
-        `values` is a free-form dict; common keys are name, details (description),
-        clientId, state (status), type, hourBudget, dollarBudget.
+        Leantime's editProject repository unconditionally overwrites every
+        column (name, details, clientId, state, hourBudget, dollarBudget,
+        psettings, menuType, type, parent, start, end), defaulting absent
+        keys to '' or null. To prevent silent data loss this method
+        fetches the current project first and merges the caller's
+        `values` over the current state.
+
+        `values` is a dict of fields to change; common keys are name,
+        details, clientId, state, type, hourBudget, dollarBudget. Pass
+        only what you want to change.
         """
+        current = await self.get_project(project_id)
+        if not current:
+            raise ValueError(f"Project with ID {project_id} not found")
+        merged: dict[str, Any] = {
+            "name": current.get("name", ""),
+            "details": current.get("details", ""),
+            "clientId": current.get("clientId", ""),
+            "state": current.get("state", ""),
+            "hourBudget": current.get("hourBudget", ""),
+            "dollarBudget": current.get("dollarBudget", ""),
+            "psettings": current.get("psettings", ""),
+            "menuType": current.get("menuType", "default"),
+            "type": current.get("type", "project"),
+            "parent": current.get("parent"),
+            "start": current.get("start"),
+            "end": current.get("end"),
+        }
+        for key, value in values.items():
+            if value is not None:
+                merged[key] = value
         return await self.call(
             "leantime.rpc.Projects.editProject",
-            {"id": project_id, "values": values},
+            {"id": project_id, "values": merged},
         )
 
     async def patch_project(self, project_id: int, params: dict) -> bool:
@@ -215,27 +243,74 @@ class LeantimeClient:
         params = {"values": values}
         return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
     
-    async def update_ticket(self, ticket_id: int, project_id: int,
+    async def update_ticket(self, ticket_id: int, project_id: Optional[int] = None,
                             milestone_id: Optional[int] = None,
                             sprint_id: Optional[int] = None,
                             **kwargs) -> dict:
-        """Update an existing ticket.
+        """Update an existing ticket, preserving any field the caller doesn't change.
+
+        Leantime's updateTicket service is a partial-write hazard: it
+        reconstructs every field as `$values['X'] ?? ''` and the
+        repository unconditionally overwrites every column. Calling it
+        with only `{"id": tid, "headline": "x"}` blanks status, type,
+        description, milestoneid, sprint, tags, priority, dependingTicketId,
+        editFrom, editTo, etc. To prevent that, this method fetches the
+        current ticket first and merges the caller's changes over the
+        full current state.
 
         Args:
-            ticket_id: The ID of the ticket to update
-            project_id: The project ID where the ticket belongs
-            milestone_id: Optional milestone (ticket of type=milestone) to assign this ticket to.
-                          Pass 0 to detach from any current milestone.
-            sprint_id: Optional sprint ID to assign this ticket to. Pass 0 to detach.
-            **kwargs: Additional parameters to update
+            ticket_id: The ID of the ticket to update.
+            project_id: Optional new projectId. If None, the current
+                projectId is preserved.
+            milestone_id: Optional milestone link. Pass an int to attach,
+                pass 0 to detach, pass None to leave unchanged.
+            sprint_id: Optional sprint link. Same semantics as milestone_id.
+            **kwargs: Other ticket fields to update (headline, description,
+                status, priority, etc.). None values are ignored
+                (current value preserved).
         """
-        values = {"id": ticket_id, "projectId": project_id, **kwargs}
+        current = await self.get_ticket(ticket_id)
+        if not current:
+            raise ValueError(f"Ticket with ID {ticket_id} not found")
+
+        # Start from the ticket's current state, then layer changes on top.
+        values: dict[str, Any] = {
+            "id": ticket_id,
+            "headline": current.get("headline", ""),
+            "type": current.get("type", "task"),
+            "description": current.get("description", ""),
+            "projectId": current.get("projectId"),
+            "editorId": current.get("editorId", ""),
+            "dateToFinish": current.get("dateToFinish", ""),
+            "status": current.get("status", ""),
+            "planHours": current.get("planHours", ""),
+            "tags": current.get("tags", ""),
+            "sprint": current.get("sprint", ""),
+            "storypoints": current.get("storypoints", ""),
+            "hourRemaining": current.get("hourRemaining", ""),
+            "priority": current.get("priority", ""),
+            "acceptanceCriteria": current.get("acceptanceCriteria", ""),
+            "editFrom": current.get("editFrom", ""),
+            "editTo": current.get("editTo", ""),
+            "dependingTicketId": current.get("dependingTicketId", ""),
+            "milestoneid": current.get("milestoneid", ""),
+        }
+
+        if project_id is not None:
+            values["projectId"] = project_id
+        # milestone_id and sprint_id use 0 as the "detach" sentinel so callers
+        # can clear the link explicitly without confusing it with "leave alone".
         if milestone_id is not None:
-            values["milestoneid"] = milestone_id
+            values["milestoneid"] = milestone_id if milestone_id else ""
         if sprint_id is not None:
-            values["sprint"] = sprint_id
-        params = {"values": values}
-        return await self.call("leantime.rpc.Tickets.Tickets.updateTicket", params)
+            values["sprint"] = sprint_id if sprint_id else ""
+
+        # Apply the rest of the caller's changes; None means "preserve current".
+        for key, value in kwargs.items():
+            if value is not None:
+                values[key] = value
+
+        return await self.call("leantime.rpc.Tickets.Tickets.updateTicket", {"values": values})
     
     async def delete_ticket(self, ticket_id: int) -> Any:
         """Delete a ticket by ID.
@@ -657,8 +732,23 @@ class LeantimeClient:
                             project_id: Optional[int] = None,
                             start_date: Optional[str] = None,
                             end_date: Optional[str] = None) -> Any:
-        """Update an existing sprint (name / project / dates)."""
-        params: dict = {"id": sprint_id}
+        """Update an existing sprint (name / project / dates).
+
+        Leantime's editSprint repository unconditionally writes name,
+        projectId, startDate and endDate from a fresh Sprints model
+        instance, so unspecified fields would be persisted as null. Fetch
+        the current sprint and layer the caller's changes over it.
+        """
+        current = await self.get_sprint(sprint_id)
+        if not current:
+            raise ValueError(f"Sprint with ID {sprint_id} not found")
+        params: dict[str, Any] = {
+            "id": sprint_id,
+            "name": current.get("name", ""),
+            "projectId": current.get("projectId"),
+            "startDate": current.get("startDate", ""),
+            "endDate": current.get("endDate", ""),
+        }
         if name is not None:
             params["name"] = name
         if project_id is not None:

@@ -238,7 +238,8 @@ async def create_ticket(headline: str, project_id: int, user_id: int,
 
 
 @app.tool()
-async def update_ticket(ticket_id: int, project_id: int,
+async def update_ticket(ticket_id: int,
+                       project_id: Optional[int] = None,
                        headline: Optional[str] = None,
                        description: Optional[str] = None,
                        status: Optional[int] = None,
@@ -246,13 +247,20 @@ async def update_ticket(ticket_id: int, project_id: int,
                        assignedTo: Optional[int] = None,
                        milestone_id: Optional[int] = None,
                        sprint_id: Optional[int] = None) -> str:
-    """Update an existing ticket.
+    """Update an existing ticket. Pass only the fields you want to change.
 
-    Pass milestone_id=0 or sprint_id=0 to detach the ticket from its current
-    milestone or sprint respectively.
+    Fields you do NOT pass are preserved. Leantime's updateTicket would
+    otherwise blank unspecified fields (status, milestoneid, sprint, tags,
+    priority, etc.) — this tool fetches the current ticket and merges
+    your changes over it to prevent that.
+
+    milestone_id=0 or sprint_id=0 detaches the ticket from its current
+    milestone or sprint. milestone_id=None or sprint_id=None leaves the
+    current link unchanged. Same shape for project_id (only pass it if
+    you really want to move the ticket between projects).
     """
     client = get_client()
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     if headline is not None:
         kwargs['headline'] = headline
     if description is not None:
@@ -265,7 +273,7 @@ async def update_ticket(ticket_id: int, project_id: int,
         kwargs['assignedTo'] = assignedTo
 
     result = await client.update_ticket(
-        ticket_id, project_id,
+        ticket_id, project_id=project_id,
         milestone_id=milestone_id, sprint_id=sprint_id,
         **kwargs,
     )
