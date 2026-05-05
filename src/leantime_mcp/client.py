@@ -215,13 +215,27 @@ class LeantimeClient:
             tags: Comma-separated list of tags to add to the ticket
             milestone_id: Optional milestone (ticket of type=milestone) to assign this ticket to.
             sprint_id: Optional sprint to assign this ticket to.
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters. `assignedTo` is translated to
+                Leantime's wire field name `editorId` (Leantime's
+                addTicket reads `$values['editorId']`, NOT `assignedTo`,
+                so the previous version silently dropped the assignment).
         """
         from datetime import datetime
 
         # Use current date if none provided
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
+
+        # Translate the Pythonic camelCase name to Leantime's wire field.
+        # Without this rename, `assignedTo=N` lands in `values['assignedTo']`
+        # which Leantime's addTicket service silently ignores; the assignee
+        # then falls back to the empty default and the ticket appears
+        # unassigned in the UI. assignedTo=0 maps to the empty-string
+        # "unassign" sentinel (consistent with milestone_id=0 / sprint_id=0).
+        if "assignedTo" in kwargs:
+            _val = kwargs.pop("assignedTo")
+            if _val is not None:
+                kwargs["editorId"] = "" if _val == 0 else _val
 
         # The API expects a 'values' parameter containing the ticket data
         values = {
@@ -304,6 +318,18 @@ class LeantimeClient:
             values["milestoneid"] = milestone_id if milestone_id else ""
         if sprint_id is not None:
             values["sprint"] = sprint_id if sprint_id else ""
+
+        # Translate the Pythonic name to Leantime's wire field BEFORE the
+        # merge loop. Otherwise we'd send both the merged-in current
+        # editorId AND the caller's intended new value under the wrong key
+        # (assignedTo) -- Leantime would persist the current value and
+        # silently ignore the requested change. assignedTo=0 maps to the
+        # empty-string "unassign" sentinel (matches milestone_id=0 /
+        # sprint_id=0 detach semantics).
+        if "assignedTo" in kwargs:
+            _val = kwargs.pop("assignedTo")
+            if _val is not None:
+                kwargs["editorId"] = "" if _val == 0 else _val
 
         # Apply the rest of the caller's changes; None means "preserve current".
         for key, value in kwargs.items():
