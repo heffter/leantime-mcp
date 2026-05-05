@@ -161,6 +161,7 @@ The server exposes 60 MCP tools spanning the Leantime domains below, plus two no
 **Diagnostics**
 
 - `get_version` - return package version, git commit, build date, and runtime versions for "is the right binary deployed?" checks
+- `get_queue_status` - return Leantime client queue depth (in_flight / max_concurrent) and rate-limiter state. Useful when calls feel slow.
 
 **Projects**
 
@@ -254,11 +255,17 @@ These are documented inline in each tool's docstring; collected here as a quick 
   - **Reactive retry-on-429** — if the proactive layer's pace doesn't match Leantime's reality (e.g. a second client shares the limit, or your Leantime config drifted), 429s trigger automatic retry with exponential backoff (`~1s, 2s, 4s, 8s, 16s`) and 25% jitter, honoring a `Retry-After` response header if Leantime sends one. Tunables: `LEANTIME_MAX_RETRIES` (default 5), `LEANTIME_BACKOFF_BASE` (default 1.0s), `LEANTIME_BACKOFF_CAP` (default 30s). Persistent 429s past the retry budget surface as `httpx.HTTPStatusError`.
 
   In normal use you won't see 429s in the logs anymore; instead you might see one `INFO` line per pacing event (`Leantime rate-limit pacing: sleeping 0.42s before next call`) when the bucket is empty. That's the proactive layer doing its job.
-- **Slow Leantime queries can hit `httpx.ReadTimeout`** (e.g. `getAllMilestones` with progress join across many milestones, on a busy host). Default per-request timeout is 60s (tunable via `LEANTIME_TIMEOUT`). On timeout the client behaves differently for safe vs unsafe operations:
+- **Slow Leantime queries can hit `httpx.ReadTimeout`**. Default per-request timeout is 30s (tunable via `LEANTIME_TIMEOUT`); total worst-case budget with one retry is 30+30=60s, sized to fit inside Claude Code's ~60s MCP-client tool timeout so failures surface meaningfully rather than as a generic client-side timeout. On timeout the client behaves differently for safe vs unsafe operations:
   - **Idempotent reads** (`get*` / `list*` / `getAll*` / `poll*` / `find*` / `is*` / `has*` / `read*` method-name prefixes) retry once on `ReadTimeout` (configurable via `LEANTIME_TIMEOUT_RETRIES`, default 1).
   - **Writes** (`add*` / `create*` / `update*` / `edit*` / `delete*` / `patch*` / `quick*` / `move*` / `upsert*`) never retry on timeout — the server may have already applied the operation, retrying could create duplicate tickets / comments / etc. The caller should verify with a follow-up read before re-issuing.
 
   Either way, timeouts surface as `LeantimeAPIError(code=-32099, message="Timeout calling <method> after <Ns> ...")` — a clear MCP-client message rather than a giant `httpx.ReadTimeout` traceback.
+
+- **`list_milestones` uses `getAllMilestonesOverview`, not `getAllMilestones`.** Leantime's `getAllMilestones` PHP service unconditionally calls `sortItemsHierarchically` → `buildTicketTree`, an O(N²) recursive tree builder. On a Synology-hosted 3.7.x with non-trivial data this exceeds 60s. It also returns a *flattened tree* (milestones + their child tasks inlined) rather than just milestones — confusing for callers asking for `list_milestones`. The overview RPC skips the traversal, returns only `type=milestone` rows, and is ~0.2s on the same dataset. If you need each milestone's child tasks, call `list_tickets` separately with the milestone IDs.
+
+- **Bounded concurrency for outbound Leantime calls.** The MCP client wraps `httpx.post` in an `anyio.CapacityLimiter` (default 3 in-flight, configurable via `LEANTIME_MAX_CONCURRENT`). Excess callers wait FIFO. This prevents bursts from saturating Leantime's PHP-FPM workers. Visible via the `get_queue_status` MCP tool — if `in_flight == max_concurrent` for sustained periods, raise the cap or address Leantime-side resource constraints (PHP-FPM workers, MySQL).
+
+- **Tuning Leantime's own rate limit (`LEAN_RATELIMIT_API`).** Stock default is **10 requests per 60-second window**, keyed on `IP + session-user-id` (per-API-key keying is commented out in `RequestRateLimiter.php`). For self-hosted deployments under any AI-driven workload, raise it on the Leantime container's environment, e.g. `LEAN_RATELIMIT_API=200`. Then bump the MCP container's `LEANTIME_RATE_LIMIT_PER_MIN` to match. Without this, the proactive pacing layer effectively throttles every workflow to ~1 request every 6 seconds.
 - **`get_milestone_progress` is not exposed.** The PHP signature requires a `Milestone` model object; JSON-RPC cannot construct it.
 - **`getTimesheets`/`getAll` for timesheets is not exposed.** Same Carbon-object issue. `get_timesheets` here uses `pollForNewTimesheets` instead.
 - **No deletion** for projects, sprints, or goals via RPC - Leantime's service layer does not expose those operations. Use the web UI.

@@ -11,6 +11,7 @@ import random
 import time
 from typing import Any, Optional
 
+import anyio
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -37,11 +38,16 @@ _BACKOFF_BASE = float(os.getenv("LEANTIME_BACKOFF_BASE", "1.0"))
 _BACKOFF_CAP = float(os.getenv("LEANTIME_BACKOFF_CAP", "30.0"))
 _RATE_LIMIT_PER_MIN = float(os.getenv("LEANTIME_RATE_LIMIT_PER_MIN", "10"))
 _RATE_BURST = float(os.getenv("LEANTIME_RATE_BURST", "10"))
+# Bounded concurrency: how many in-flight requests we'll dispatch to
+# Leantime simultaneously. Defaults to 3 to leave headroom for browser
+# tabs / cron / health probes against a typical 5-worker PHP-FPM pool.
+# Excess callers serialize FIFO behind anyio.CapacityLimiter.
+_LEANTIME_MAX_CONCURRENT = int(os.getenv("LEANTIME_MAX_CONCURRENT", "3"))
 # Per-request timeout in seconds (raised from the previous hard-coded 30s).
 # Some Leantime queries (e.g. getAllMilestones with progress join across
 # many milestones) can take >30s on a busy host. Tunable to give callers
 # room without re-rolling the image.
-_TIMEOUT = float(os.getenv("LEANTIME_TIMEOUT", "60.0"))
+_TIMEOUT = float(os.getenv("LEANTIME_TIMEOUT", "30.0"))
 # Number of additional attempts on a ReadTimeout for idempotent reads.
 # Writes (create/update/delete/...) are NEVER retried on timeout because
 # the server may have already applied the operation -- retrying could
@@ -138,6 +144,11 @@ class LeantimeClient:
             rate_per_sec=_RATE_LIMIT_PER_MIN / 60.0,
             capacity=_RATE_BURST,
         )
+        # Bounded-concurrency layer: only N httpx.post()s against Leantime
+        # in flight at a time. Excess callers wait FIFO. Visible via the
+        # get_queue_status MCP tool. This is the actual queue the user
+        # asked for (the rate limiter alone doesn't give that visibility).
+        self._concurrency = anyio.CapacityLimiter(_LEANTIME_MAX_CONCURRENT)
     
     def _get_next_id(self) -> int:
         """Get next JSON-RPC request ID."""
@@ -190,7 +201,10 @@ class LeantimeClient:
         idempotent = _is_idempotent_method(method)
         timeout_attempts_left = _TIMEOUT_RETRIES if idempotent else 0
 
-        async with httpx.AsyncClient() as client:
+        # Bounded concurrency: only N callers hit Leantime at once.
+        # Excess waiters queue FIFO inside CapacityLimiter. Visible via
+        # get_queue_status (in_flight = borrowed_tokens).
+        async with self._concurrency, httpx.AsyncClient() as client:
             for attempt in range(_MAX_RETRIES + 1):
                 try:
                     response = await client.post(
@@ -807,17 +821,39 @@ class LeantimeClient:
         params = {"ticketId": ticket_id}
         return await self.call("leantime.rpc.Tickets.Tickets.getAllSubtasks", params)
     
-    async def list_milestones(self, project_id: int, sort_by: str = "standard") -> list:
-        """List all milestones for a project.
+    async def list_milestones(self, project_id: int, sort_by: str = "duedate") -> list:
+        """List all milestones for a project (lightweight overview path).
 
-        Milestones in Leantime are tickets with type=milestone, so this hits
-        the Tickets module's dedicated milestone endpoint.
+        Uses leantime.rpc.Tickets.Tickets.getAllMilestonesOverview rather
+        than getAllMilestones. The reason is twofold:
+
+        1. The plain getAllMilestones service unconditionally calls
+           sortItemsHierarchically -> buildTicketTree, an O(N^2) recursive
+           PHP traversal that re-scans the full result for every node.
+           On a Synology-hosted Leantime 3.7.x with non-trivial data this
+           routinely exceeded 60s (verified against PHP source).
+        2. getAllMilestones returned a FLATTENED tree that mixed real
+           milestones with their child tickets (so callers asking for
+           "milestones in project X" got 80 rows of mostly tasks).
+           getAllMilestonesOverview returns only rows where type=milestone,
+           which is what callers of list_milestones actually want.
+
+        Returns the same record shape as before (id, headline, status,
+        projectId, milestoneid, type, editFrom, editTo, tags, plus a
+        nested children field when applicable). sort_by default changed
+        from 'standard' to 'duedate' since the overview method has its
+        own sortBy semantics.
         """
         params = {
-            "searchCriteria": {"currentProject": project_id},
+            "includeArchived": False,
             "sortBy": sort_by,
+            "includeTasks": False,
+            "clientId": 0,
+            "searchCriteria": {"currentProject": project_id},
         }
-        return await self.call("leantime.rpc.Tickets.Tickets.getAllMilestones", params)
+        return await self.call(
+            "leantime.rpc.Tickets.Tickets.getAllMilestonesOverview", params,
+        )
 
     async def create_milestone(self, headline: str, project_id: int, editor_id: int,
                                edit_from: Optional[str] = None, edit_to: Optional[str] = None,

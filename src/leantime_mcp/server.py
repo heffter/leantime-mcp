@@ -133,6 +133,41 @@ async def get_version() -> str:
 
 
 @app.tool()
+async def get_queue_status() -> str:
+    """Return the Leantime client's queue and rate-limiter state.
+
+    Useful when calls feel slow. Shows:
+
+    - in_flight / max_concurrent: how many requests are currently
+      dispatched against Leantime, and the configured cap (set by
+      LEANTIME_MAX_CONCURRENT, default 3). Excess callers wait FIFO.
+    - rate_limit_*: the proactive token-bucket state for staying under
+      Leantime's LEAN_RATELIMIT_API window.
+    - timeout_*: per-request timeout and retry budget.
+
+    If in_flight equals max_concurrent for sustained periods, your
+    Leantime is the bottleneck and raising LEANTIME_MAX_CONCURRENT
+    likely won't help; bump LEAN_RATELIMIT_API on the Leantime side
+    (default 10/min is very low) and / or raise PHP-FPM workers.
+    """
+    from leantime_mcp.client import (
+        _LEANTIME_MAX_CONCURRENT, _RATE_LIMIT_PER_MIN, _RATE_BURST,
+        _TIMEOUT, _TIMEOUT_RETRIES, _MAX_RETRIES,
+    )
+    client = get_client()
+    return json.dumps({
+        "in_flight": client._concurrency.borrowed_tokens,
+        "max_concurrent": _LEANTIME_MAX_CONCURRENT,
+        "rate_limit_per_min": _RATE_LIMIT_PER_MIN,
+        "rate_limit_remaining_tokens": round(client._limiter._tokens, 2),
+        "rate_limit_burst_capacity": _RATE_BURST,
+        "timeout_seconds": _TIMEOUT,
+        "timeout_retries": _TIMEOUT_RETRIES,
+        "rate_limit_429_max_retries": _MAX_RETRIES,
+    }, indent=2)
+
+
+@app.tool()
 async def get_project(project_id: int) -> str:
     """Get details of a specific project by ID."""
     client = get_client()
@@ -367,11 +402,19 @@ async def get_status_labels() -> str:
 
 
 @app.tool()
-async def list_milestones(project_id: int, sort_by: str = "standard") -> str:
-    """List all milestones for a project.
+async def list_milestones(project_id: int, sort_by: str = "duedate") -> str:
+    """List milestones for a project.
 
-    Returns the milestone records (Leantime models milestones as tickets with
-    type=milestone) including headlines, dates, status, and progress fields.
+    Returns rows where type=milestone (real milestones, not their child
+    tasks). Backed by the lightweight getAllMilestonesOverview RPC path;
+    the previous getAllMilestones path was an O(N^2) PHP traversal that
+    timed out on non-trivial datasets and conflated milestones with
+    their child tickets.
+
+    sort_by accepts the values getAllMilestonesOverview supports
+    ('duedate' default, 'standard', 'date', 'kanbansort'). If you need
+    each milestone's child tasks too, call list_tickets separately
+    filtered by milestone_id.
     """
     client = get_client()
     result = await client.list_milestones(project_id, sort_by=sort_by)
