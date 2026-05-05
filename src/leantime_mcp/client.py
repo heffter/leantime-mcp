@@ -886,14 +886,33 @@ class LeantimeClient:
                                edit_from: Optional[str] = None, edit_to: Optional[str] = None,
                                tags: Optional[str] = None,
                                dependent_milestone: Optional[int] = None) -> int:
-        """Create a milestone (server-side type=milestone). Returns the new milestone ID.
+        """Create a milestone and clean up the fields quickAddMilestone trashes.
 
-        editor_id is the Leantime user ID owning the milestone (typically the
-        creator). edit_from / edit_to are the milestone start/end dates in
-        YYYY-MM-DD format and are passed through verbatim.
+        Leantime's quickAddMilestone PHP body hardcodes seven+ columns to
+        empty strings on insert (verified against source):
 
-        quickAddMilestone wraps its fields under an inner 'params' key (a
-        Leantime contract quirk; verified against the running instance).
+            'description'        => '',
+            'dateToFinish'       => '',     // -> MariaDB 0000-00-00
+            'storypoints'        => '',
+            'hourRemaining'      => '',
+            'planHours'          => '',
+            'sprint'             => '',
+            'acceptanceCriteria' => '',
+            'dependingTicketId'  => '',
+
+        And `prepareTicketDates` only normalizes dateToFinish to NULL when
+        it CAN parse the input — empty strings fall through unchanged, so
+        MariaDB silently writes `0000-00-00 00:00:00`. From that moment
+        every read of the row trips Carbon's date parser inside Leantime,
+        breaking subsequent updates.
+
+        Workaround: insert via quickAddMilestone (only RPC that creates a
+        milestone), then immediately follow up with Tickets.patch to
+        rewrite the dateToFinish column as a real SQL NULL. Tickets.patch
+        is partial-by-design AND passes `null` through to the repository
+        verbatim, bypassing the prepareTicketDates "empty=skip" trap.
+
+        Returns the new milestone ID.
         """
         inner: dict = {
             "headline": headline,
@@ -908,45 +927,106 @@ class LeantimeClient:
             inner["tags"] = tags
         if dependent_milestone is not None:
             inner["dependentMilestone"] = dependent_milestone
-        return await self.call("leantime.rpc.Tickets.Tickets.quickAddMilestone", {"params": inner})
+        result = await self.call(
+            "leantime.rpc.Tickets.Tickets.quickAddMilestone",
+            {"params": inner},
+        )
 
-    async def update_milestone(self, milestone_id: int, editor_id: int,
+        # quickAddMilestone returns either an int (new id) or a one-element
+        # list [id]. Normalize.
+        new_id: Optional[int] = None
+        if isinstance(result, int):
+            new_id = result
+        elif isinstance(result, list) and result and isinstance(result[0], int):
+            new_id = result[0]
+
+        # Repair the zero-date corruption Leantime just injected.
+        if new_id and new_id > 0:
+            try:
+                await self.call(
+                    "leantime.rpc.Tickets.Tickets.patch",
+                    {"id": new_id, "params": {"dateToFinish": None}},
+                )
+            except Exception as cleanup_exc:
+                # Don't fail the whole create if the cleanup patch errors;
+                # the milestone exists and is usable. Log and move on.
+                logger.warning(
+                    "Created milestone %s but post-create dateToFinish "
+                    "cleanup failed (%s); the row may have dateToFinish=0000-00-00",
+                    new_id, cleanup_exc,
+                )
+
+        return result
+
+    async def update_milestone(self, milestone_id: int,
                                headline: Optional[str] = None,
                                edit_from: Optional[str] = None,
                                edit_to: Optional[str] = None,
                                status: Optional[int] = None,
-                               tags: Optional[str] = None) -> dict:
-        """Update a milestone's lightweight fields.
+                               tags: Optional[str] = None,
+                               editor_id: Optional[int] = None,
+                               dependent_milestone: Optional[int] = None) -> Any:
+        """Update a milestone's lightweight fields without destroying others.
 
-        Leantime's quickUpdateMilestone fails with "Undefined array key" on
-        any field the PHP method touches but the request omits, so this
-        method fetches the milestone first and merges user-supplied fields
-        over the current values. Pass only the fields you want to change.
+        Routes through Tickets.Tickets.patch (partial update) rather than
+        Tickets.Tickets.quickUpdateMilestone, which has a destructive PHP
+        body that hard-codes 12+ fields to empty strings on every call:
 
-        editor_id is required by Leantime for activity attribution.
+            // Leantime's own source for quickUpdateMilestone:
+            'description'        => '',
+            'projectId'          => session('currentProject'),  // NULL under API auth
+            'dateToFinish'       => '',                          // -> 0000-00-00 in DB
+            'storypoints'        => '',
+            'hourRemaining'      => '',
+            'planHours'          => '',
+            'sprint'             => '',
+            'acceptanceCriteria' => '',
+            'priority'           => 3,                           // hard reset
+            'dependingTicketId'  => '',
+            ...
+
+        That meant every quickUpdateMilestone call silently corrupted the
+        row's projectId (orphaning the milestone), dateToFinish (zero-date
+        corruption that crashes Carbon on subsequent reads), priority,
+        description, and several other fields. Routing through `patch`
+        is safer because patch only writes fields explicitly present in
+        the params dict.
+
+        Args:
+            milestone_id: The milestone (ticket-with-type=milestone) to update.
+            headline / edit_from / edit_to / status / tags: each None means
+                "leave alone". Only non-None values are sent.
+            editor_id: Optional reassign of the milestone's editorId
+                (assignee). Pass None to leave unchanged.
+            dependent_milestone: Optional parent-milestone link. Pass None
+                to leave unchanged. (This is the milestoneid field in
+                Leantime's schema; its semantics for milestone rows are
+                "parent milestone".)
+
+        Returns Tickets.patch's bool result.
         """
-        current = await self.get_ticket(milestone_id)
-        if not current:
-            raise ValueError(f"Milestone with ID {milestone_id} not found")
-        # Status fallback uses an explicit None check instead of `or 3`
-        # because Leantime status IDs are integers and could include 0;
-        # the truthy form would silently rewrite a stored 0 to 3.
+        params: dict = {}
+        if headline is not None:
+            params["headline"] = headline
+        if edit_from is not None:
+            params["editFrom"] = edit_from
+        if edit_to is not None:
+            params["editTo"] = edit_to
         if status is not None:
-            resolved_status = status
-        else:
-            cur_status = current.get("status")
-            resolved_status = int(cur_status) if cur_status is not None else 3
-        inner: dict = {
-            "id": milestone_id,
-            "editorId": editor_id,
-            "headline": headline if headline is not None else current.get("headline", ""),
-            "editFrom": edit_from if edit_from is not None else (current.get("editFrom") or ""),
-            "editTo": edit_to if edit_to is not None else (current.get("editTo") or ""),
-            "tags": tags if tags is not None else (current.get("tags") or ""),
-            "status": resolved_status,
-            "dependentMilestone": current.get("dependentMilestone") or "",
-        }
-        return await self.call("leantime.rpc.Tickets.Tickets.quickUpdateMilestone", {"params": inner})
+            params["status"] = status
+        if tags is not None:
+            params["tags"] = tags
+        if editor_id is not None:
+            params["editorId"] = editor_id
+        if dependent_milestone is not None:
+            # parent-milestone link lives in the milestoneid column
+            params["milestoneid"] = dependent_milestone
+        if not params:
+            return True  # nothing to update
+        return await self.call(
+            "leantime.rpc.Tickets.Tickets.patch",
+            {"id": milestone_id, "params": params},
+        )
 
     async def delete_milestone(self, milestone_id: int) -> dict:
         """Delete a milestone by its ticket ID."""

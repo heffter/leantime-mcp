@@ -4,7 +4,7 @@
 
 [project]
 name = "leantime-mcp"
-version = "1.0.7"
+version = "1.0.8"
 description = "Model Context Protocol server for Leantime project management API"
 readme = "README.md"
 requires-python = ">=3.10"

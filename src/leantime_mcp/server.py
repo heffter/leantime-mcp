@@ -450,20 +450,33 @@ async def create_milestone(headline: str, project_id: int, editor_id: int,
 
 
 @app.tool()
-async def update_milestone(milestone_id: int, editor_id: int,
+async def update_milestone(milestone_id: int,
                            headline: Optional[str] = None,
                            edit_from: Optional[str] = None,
                            edit_to: Optional[str] = None,
                            status: Optional[int] = None,
-                           tags: Optional[str] = None) -> str:
-    """Update a milestone's lightweight fields (headline, dates, status, tags).
+                           tags: Optional[str] = None,
+                           editor_id: Optional[int] = None,
+                           dependent_milestone: Optional[int] = None) -> str:
+    """Update a milestone's fields without destroying the others.
 
-    editor_id is required by Leantime for activity attribution.
+    Pass only the fields you want to change (None = leave alone). Routes
+    through Tickets.patch internally, which is partial-by-design — no
+    silent reset of projectId, dateToFinish, description, priority,
+    storypoints, hours, sprint, acceptanceCriteria, or dependingTicketId
+    (all of which the older quickUpdateMilestone path used to wipe on
+    every call).
+
+    Args:
+        editor_id: Optional reassign of the milestone's editorId
+            (assignee). Pass None to leave unchanged.
+        dependent_milestone: Optional parent-milestone link.
     """
     client = get_client()
     result = await client.update_milestone(
-        milestone_id=milestone_id, editor_id=editor_id, headline=headline,
+        milestone_id=milestone_id, headline=headline,
         edit_from=edit_from, edit_to=edit_to, status=status, tags=tags,
+        editor_id=editor_id, dependent_milestone=dependent_milestone,
     )
     return json.dumps(result, indent=2)
 
