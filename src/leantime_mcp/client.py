@@ -154,6 +154,67 @@ class LeantimeClient:
         """Get next JSON-RPC request ID."""
         self._request_id += 1
         return self._request_id
+
+    @staticmethod
+    def _extract_new_ticket_id(result: Any) -> Optional[int]:
+        """Pull the new ticket id from addTicket / quickAddMilestone return.
+
+        Leantime sometimes returns a bare int, sometimes a one-element
+        list, sometimes an error dict. Normalize to int|None.
+        """
+        if isinstance(result, int) and result > 0:
+            return result
+        if (
+            isinstance(result, list)
+            and result
+            and isinstance(result[0], int)
+            and result[0] > 0
+        ):
+            return result[0]
+        return None
+
+    async def _post_create_null_unset_dates(
+        self,
+        ticket_id: int,
+        provided: dict,
+    ) -> None:
+        """NULL the date columns the caller didn't explicitly provide.
+
+        Background: every Leantime add* / quick* service that writes a
+        ticket row defaults missing date keys to '' via PHP `?? ''`,
+        and `prepareTicketDates` only normalizes when the value is
+        truthy enough to parse (`! empty(...)`). An empty string falls
+        through to the SQL UPDATE, MariaDB silently zero-dates it
+        (`'' -> 0000-00-00 00:00:00`), and the row breaks Carbon's
+        date parser on every subsequent read.
+
+        Tickets.Tickets.patch is partial-by-design AND passes Python
+        None straight through to the SQL UPDATE as a real NULL,
+        bypassing prepareTicketDates' "empty=skip" check (because
+        partial patch does NOT call prepareTicketDates for fields
+        not in $params, and NULL is what we want). This method runs
+        right after the create call to clean up exactly the columns
+        the caller did not mean to set.
+
+        `provided` is a dict where True keys mean "caller passed a
+        real value, do NOT clean it up" and False keys mean "caller
+        omitted, clean to NULL".
+        """
+        if not ticket_id or ticket_id <= 0:
+            return
+        cleanup = {k: None for k, was_provided in provided.items() if not was_provided}
+        if not cleanup:
+            return
+        try:
+            await self.call(
+                "leantime.rpc.Tickets.Tickets.patch",
+                {"id": ticket_id, "params": cleanup},
+            )
+        except Exception as exc:  # pragma: no cover - defensive log
+            logger.warning(
+                "post-create date cleanup failed for ticket %s (cleanup=%s): %s",
+                ticket_id, list(cleanup.keys()), exc,
+            )
     
     async def call(self, method: str, params: Optional[dict] = None) -> Any:
         """Make a JSON-RPC 2.0 call to Leantime API.
@@ -472,8 +533,23 @@ class LeantimeClient:
         if sprint_id is not None:
             values["sprint"] = sprint_id
 
+        # Track which date columns the caller explicitly provided. After the
+        # insert, we'll NULL any column that we DIDN'T provide so MariaDB
+        # doesn't silently zero-date it via Leantime's `?? ''` defaults.
+        # See _post_create_null_unset_dates docstring for the mechanism.
+        provided_dates = {
+            "dateToFinish": "dateToFinish" in values and values["dateToFinish"] not in (None, ""),
+            "editFrom": "editFrom" in values and values["editFrom"] not in (None, ""),
+            "editTo": "editTo" in values and values["editTo"] not in (None, ""),
+        }
+
         params = {"values": values}
-        return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
+        result = await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
+
+        new_id = self._extract_new_ticket_id(result)
+        if new_id:
+            await self._post_create_null_unset_dates(new_id, provided_dates)
+        return result
     
     async def update_ticket(self, ticket_id: int, project_id: Optional[int] = None,
                             milestone_id: Optional[int] = None,
@@ -583,33 +659,49 @@ class LeantimeClient:
                                   plan_hours: Optional[int] = None,
                                   sprint: Optional[int] = None,
                                   priority: Optional[int] = None,
-                                  date_to_finish: Optional[str] = None) -> Any:
-        """Lightweight ticket creation with a reduced field set.
+                                  date_to_finish: Optional[str] = None,
+                                  tags: Optional[str] = None) -> Any:
+        """Lightweight ticket creation - now routed through create_ticket.
 
-        Like the quick* milestone helpers, quickAddTicket wraps its fields
-        under an inner 'params' key (Leantime contract quirk).
+        Leantime's quickAddTicket service is doubly broken:
+
+        1) It hardcodes `tags => ''` - any caller-supplied tags are silently
+           dropped before the insert.
+        2) It uses the same `?? ''` defaults for date columns as addTicket,
+           so missing dateToFinish / editFrom / editTo become 0000-00-00 in
+           the DB (the same corruption that produced the milestone-id-172
+           ghost).
+
+        Both bugs are fixed by routing through our create_ticket method,
+        which uses Leantime's regular addTicket plus the post-create
+        date-null cleanup. The MCP tool surface stays the same.
+
+        editor_id is treated as the ticket's assignee (Leantime's editorId
+        column), matching the wire-rename create_ticket already does for
+        its assignedTo parameter.
         """
-        inner: dict = {
-            "headline": headline,
-            "type": ticket_type,
-            "projectId": project_id,
-            "editorId": editor_id,
-        }
+        kwargs: dict = {"type": ticket_type, "editorId": editor_id}
         if description is not None:
-            inner["description"] = description
+            kwargs["description"] = description
         if status is not None:
-            inner["status"] = status
+            kwargs["status"] = status
         if storypoints is not None:
-            inner["storypoints"] = storypoints
+            kwargs["storypoints"] = storypoints
         if plan_hours is not None:
-            inner["planHours"] = plan_hours
+            kwargs["planHours"] = plan_hours
         if sprint is not None:
-            inner["sprint"] = sprint
+            kwargs["sprint"] = sprint
         if priority is not None:
-            inner["priority"] = priority
+            kwargs["priority"] = priority
         if date_to_finish is not None:
-            inner["dateToFinish"] = date_to_finish
-        return await self.call("leantime.rpc.Tickets.Tickets.quickAddTicket", {"params": inner})
+            kwargs["dateToFinish"] = date_to_finish
+        return await self.create_ticket(
+            headline=headline,
+            project_id=project_id,
+            user_id=editor_id,
+            tags=tags,
+            **kwargs,
+        )
 
     async def move_ticket(self, ticket_id: int, project_id: int) -> bool:
         """Move a ticket (and milestone children if applicable) to a different project."""
@@ -1266,10 +1358,22 @@ class LeantimeClient:
         if tags is not None:
             values["tags"] = tags
         
+        # Track which date columns the caller explicitly provided so we can
+        # NULL the rest after insert (see _post_create_null_unset_dates).
+        provided_dates = {
+            "dateToFinish": "dateToFinish" in values and values["dateToFinish"] not in (None, ""),
+            "editFrom": "editFrom" in values and values["editFrom"] not in (None, ""),
+            "editTo": "editTo" in values and values["editTo"] not in (None, ""),
+        }
+
         # Use addTicket to create the subtask
         params = {"values": values}
-        
+
         # Debug logging
         logger.info(f"Creating subtask via addTicket: type=subtask, dependingTicketId={parent_ticket_id}, milestoneid={milestone_id}")
-        
-        return await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
+
+        result = await self.call("leantime.rpc.Tickets.Tickets.addTicket", params)
+        new_id = self._extract_new_ticket_id(result)
+        if new_id:
+            await self._post_create_null_unset_dates(new_id, provided_dates)
+        return result

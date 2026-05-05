@@ -274,27 +274,49 @@ async def list_tickets(project_id: int = None) -> str:
 @app.tool()
 async def create_ticket(headline: str, project_id: int, user_id: int,
                        date: Optional[str] = None,
+                       due_date: Optional[str] = None,
                        description: Optional[str] = None,
                        status: Optional[int] = None,
                        priority: Optional[str] = None,
                        assignedTo: Optional[int] = None,
                        tags: Optional[str] = None,
                        milestone_id: Optional[int] = None,
-                       sprint_id: Optional[int] = None) -> str:
+                       sprint_id: Optional[int] = None,
+                       edit_from: Optional[str] = None,
+                       edit_to: Optional[str] = None) -> str:
     """Create a new ticket.
 
     Args:
-        status: Status ID (int) matching one of the IDs returned by get_status_labels.
-        assignedTo: User ID (int) to assign the ticket to.
-        milestone_id: Optional milestone (returned by list_milestones) to attach the ticket to.
-        sprint_id: Optional sprint (returned by list_sprints) to attach the ticket to.
+        date: Creation date (YYYY-MM-DD); defaults to today if omitted.
+        due_date: Optional deadline date (YYYY-MM-DD). Maps to Leantime's
+            dateToFinish column. If omitted, the column is left NULL
+            (the proper "no deadline" state — Leantime would otherwise
+            silently zero-date it via its `?? ''` defaults; this tool
+            cleans up via Tickets.patch right after creation).
+        edit_from / edit_to: Optional planning window dates. Same NULL
+            cleanup as due_date if omitted.
+        status: Status ID (int) from get_status_labels.
+        priority: Priority level ('high', 'medium', 'low').
+        assignedTo: User ID to assign to (translated to Leantime's
+            editorId on the wire).
+        tags: Comma-separated tag list.
+        milestone_id: Optional milestone (returned by list_milestones).
+        sprint_id: Optional sprint (returned by list_sprints).
     """
     client = get_client()
+    extra: dict = {}
+    if due_date is not None:
+        extra["dateToFinish"] = due_date
+    if edit_from is not None:
+        extra["editFrom"] = edit_from
+    if edit_to is not None:
+        extra["editTo"] = edit_to
     result = await client.create_ticket(
         headline=headline, project_id=project_id, user_id=user_id, date=date,
         description=description, status=status, priority=priority,
         assignedTo=assignedTo, tags=tags,
         milestone_id=milestone_id, sprint_id=sprint_id,
+        **extra,
     )
     return json.dumps(result, indent=2)
 
@@ -308,7 +330,11 @@ async def update_ticket(ticket_id: int,
                        priority: Optional[str] = None,
                        assignedTo: Optional[int] = None,
                        milestone_id: Optional[int] = None,
-                       sprint_id: Optional[int] = None) -> str:
+                       sprint_id: Optional[int] = None,
+                       due_date: Optional[str] = None,
+                       edit_from: Optional[str] = None,
+                       edit_to: Optional[str] = None,
+                       tags: Optional[str] = None) -> str:
     """Update an existing ticket. Pass only the fields you want to change.
 
     Fields you do NOT pass are preserved. Leantime's updateTicket would
@@ -316,10 +342,17 @@ async def update_ticket(ticket_id: int,
     priority, etc.) — this tool fetches the current ticket and merges
     your changes over it to prevent that.
 
+    Args:
+        due_date: Sets dateToFinish (deadline). Pass YYYY-MM-DD or empty
+            string to clear the deadline.
+        edit_from / edit_to: Planning window start/end.
+        tags: Comma-separated tag string. Replaces the existing tags
+            entirely (passing 'a,b' overwrites whatever was there).
+
     milestone_id=0 or sprint_id=0 detaches the ticket from its current
-    milestone or sprint. milestone_id=None or sprint_id=None leaves the
-    current link unchanged. Same shape for project_id (only pass it if
-    you really want to move the ticket between projects).
+    milestone or sprint. None on any field leaves the current link
+    unchanged. Same shape for project_id (only pass it if you really
+    want to move the ticket between projects).
     """
     client = get_client()
     kwargs: dict[str, Any] = {}
@@ -333,6 +366,14 @@ async def update_ticket(ticket_id: int,
         kwargs['priority'] = priority
     if assignedTo is not None:
         kwargs['assignedTo'] = assignedTo
+    if due_date is not None:
+        kwargs['dateToFinish'] = due_date
+    if edit_from is not None:
+        kwargs['editFrom'] = edit_from
+    if edit_to is not None:
+        kwargs['editTo'] = edit_to
+    if tags is not None:
+        kwargs['tags'] = tags
 
     result = await client.update_ticket(
         ticket_id, project_id=project_id,
@@ -369,10 +410,13 @@ async def quick_create_ticket(headline: str, project_id: int, editor_id: int,
                               plan_hours: Optional[int] = None,
                               sprint: Optional[int] = None,
                               priority: Optional[int] = None,
-                              date_to_finish: Optional[str] = None) -> str:
-    """Lightweight ticket creation with a reduced field set.
+                              date_to_finish: Optional[str] = None,
+                              tags: Optional[str] = None) -> str:
+    """Lightweight ticket creation. Routes through the safer create_ticket path.
 
-    Use create_ticket for the full surface (tags, milestone_id, etc.).
+    Use create_ticket directly for the full surface (milestone_id,
+    sprint_id, assignedTo). This tool is kept for backward compatibility
+    and as a convenience for the most common quick-add fields.
     """
     client = get_client()
     return json.dumps(
@@ -380,7 +424,7 @@ async def quick_create_ticket(headline: str, project_id: int, editor_id: int,
             headline=headline, project_id=project_id, editor_id=editor_id,
             description=description, ticket_type=ticket_type, status=status,
             storypoints=storypoints, plan_hours=plan_hours, sprint=sprint,
-            priority=priority, date_to_finish=date_to_finish,
+            priority=priority, date_to_finish=date_to_finish, tags=tags,
         ),
         indent=2,
     )
