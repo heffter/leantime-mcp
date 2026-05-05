@@ -862,16 +862,45 @@ class LeantimeClient:
         }
         return await self.call("leantime.rpc.Comments.getComments", params)
     
-    async def add_timesheet(self, user_id: int, ticket_id: int, hours: float, date: str, **kwargs) -> dict:
-        """Add a timesheet entry."""
-        params = {
+    async def add_timesheet(self, user_id: int, ticket_id: int, hours: float,
+                            date: str, kind: str = "GENERAL_BILLABLE",
+                            description: Optional[str] = None,
+                            **kwargs) -> Any:
+        """Add a timesheet entry via Timesheets.logTime.
+
+        The previous implementation called `leantime.rpc.Timesheets.addTime`
+        which is a phantom endpoint (the Leantime service class only
+        defines `logTime`/`upsertTime`/`deleteTime` as @api-callable;
+        `addTime` is the repository method, not exposed via JSON-RPC).
+        Calls used to silently fail with -32601 'Method not found'.
+
+        logTime expects the inner-params wrapping shape
+        (`{"ticketId": <id>, "params": {...}}`) like several other
+        Leantime methods. We construct it here from the ergonomic
+        flat parameters our MCP tool surface uses.
+
+        Note on Leantime's hardcoded blanks: logTime hardcodes several
+        billing-related columns (invoicedEmplDate, invoicedCompDate,
+        paid, paidDate) to empty string in the service body. Empirically
+        these come back as SQL NULL on read (verified against a live
+        instance), so the corruption pattern that hit milestones
+        doesn't manifest here. No post-create cleanup needed.
+        """
+        inner: dict = {
             "userId": user_id,
-            "ticketId": ticket_id,
-            "hours": hours,
             "date": date,
-            **kwargs
+            "hours": hours,
+            "kind": kind,
         }
-        return await self.call("leantime.rpc.Timesheets.addTime", params)
+        if description is not None:
+            inner["description"] = description
+        # Allow callers to pass additional Leantime-recognised fields like
+        # 'dateString', 'timestamp', 'time' through **kwargs.
+        inner.update(kwargs)
+        return await self.call(
+            "leantime.rpc.Timesheets.logTime",
+            {"ticketId": ticket_id, "params": inner},
+        )
 
     async def upsert_timesheet(self, ticket_id: int, user_id: int, date: str,
                                hours: float, kind: str = "GENERAL_BILLABLE",

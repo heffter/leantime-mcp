@@ -653,11 +653,29 @@ async def get_comments(module: str, entity_id: int) -> str:
 
 
 @app.tool()
-async def add_timesheet(user_id: int, ticket_id: int, hours: float, date: str, description: str = None) -> str:
-    """Add a timesheet entry."""
+async def add_timesheet(user_id: int, ticket_id: int, hours: float, date: str,
+                        kind: str = "GENERAL_BILLABLE",
+                        description: Optional[str] = None) -> str:
+    """Add a timesheet (work-log) entry on a ticket.
+
+    Now backed by Leantime's logTime RPC. The previous implementation
+    called a phantom Timesheets.addTime endpoint that doesn't exist
+    in the service layer (silent -32601). Use upsert_timesheet if you
+    want create-or-update-on-same-day semantics.
+
+    Args:
+        user_id: User ID logging the time.
+        ticket_id: Ticket the time is logged against.
+        hours: Hours as a decimal (e.g. 0.5, 1.25).
+        date: YYYY-MM-DD or full datetime string.
+        kind: Leantime time kind. 'GENERAL_BILLABLE' (default),
+              'GENERAL_NON_BILLABLE', etc.
+        description: Optional notes.
+    """
     client = get_client()
     result = await client.add_timesheet(
-        user_id=user_id, ticket_id=ticket_id, hours=hours, date=date, description=description
+        user_id=user_id, ticket_id=ticket_id, hours=hours, date=date,
+        kind=kind, description=description,
     )
     return json.dumps(result, indent=2)
 
