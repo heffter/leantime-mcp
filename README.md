@@ -254,6 +254,11 @@ These are documented inline in each tool's docstring; collected here as a quick 
   - **Reactive retry-on-429** — if the proactive layer's pace doesn't match Leantime's reality (e.g. a second client shares the limit, or your Leantime config drifted), 429s trigger automatic retry with exponential backoff (`~1s, 2s, 4s, 8s, 16s`) and 25% jitter, honoring a `Retry-After` response header if Leantime sends one. Tunables: `LEANTIME_MAX_RETRIES` (default 5), `LEANTIME_BACKOFF_BASE` (default 1.0s), `LEANTIME_BACKOFF_CAP` (default 30s). Persistent 429s past the retry budget surface as `httpx.HTTPStatusError`.
 
   In normal use you won't see 429s in the logs anymore; instead you might see one `INFO` line per pacing event (`Leantime rate-limit pacing: sleeping 0.42s before next call`) when the bucket is empty. That's the proactive layer doing its job.
+- **Slow Leantime queries can hit `httpx.ReadTimeout`** (e.g. `getAllMilestones` with progress join across many milestones, on a busy host). Default per-request timeout is 60s (tunable via `LEANTIME_TIMEOUT`). On timeout the client behaves differently for safe vs unsafe operations:
+  - **Idempotent reads** (`get*` / `list*` / `getAll*` / `poll*` / `find*` / `is*` / `has*` / `read*` method-name prefixes) retry once on `ReadTimeout` (configurable via `LEANTIME_TIMEOUT_RETRIES`, default 1).
+  - **Writes** (`add*` / `create*` / `update*` / `edit*` / `delete*` / `patch*` / `quick*` / `move*` / `upsert*`) never retry on timeout — the server may have already applied the operation, retrying could create duplicate tickets / comments / etc. The caller should verify with a follow-up read before re-issuing.
+
+  Either way, timeouts surface as `LeantimeAPIError(code=-32099, message="Timeout calling <method> after <Ns> ...")` — a clear MCP-client message rather than a giant `httpx.ReadTimeout` traceback.
 - **`get_milestone_progress` is not exposed.** The PHP signature requires a `Milestone` model object; JSON-RPC cannot construct it.
 - **`getTimesheets`/`getAll` for timesheets is not exposed.** Same Carbon-object issue. `get_timesheets` here uses `pollForNewTimesheets` instead.
 - **No deletion** for projects, sprints, or goals via RPC - Leantime's service layer does not expose those operations. Use the web UI.

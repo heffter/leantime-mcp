@@ -4,4 +4,4 @@
 
 """Leantime MCP Server - Model Context Protocol server for Leantime API."""
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"

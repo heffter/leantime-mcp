@@ -37,6 +37,30 @@ _BACKOFF_BASE = float(os.getenv("LEANTIME_BACKOFF_BASE", "1.0"))
 _BACKOFF_CAP = float(os.getenv("LEANTIME_BACKOFF_CAP", "30.0"))
 _RATE_LIMIT_PER_MIN = float(os.getenv("LEANTIME_RATE_LIMIT_PER_MIN", "10"))
 _RATE_BURST = float(os.getenv("LEANTIME_RATE_BURST", "10"))
+# Per-request timeout in seconds (raised from the previous hard-coded 30s).
+# Some Leantime queries (e.g. getAllMilestones with progress join across
+# many milestones) can take >30s on a busy host. Tunable to give callers
+# room without re-rolling the image.
+_TIMEOUT = float(os.getenv("LEANTIME_TIMEOUT", "60.0"))
+# Number of additional attempts on a ReadTimeout for idempotent reads.
+# Writes (create/update/delete/...) are NEVER retried on timeout because
+# the server may have already applied the operation -- retrying could
+# duplicate the action.
+_TIMEOUT_RETRIES = int(os.getenv("LEANTIME_TIMEOUT_RETRIES", "1"))
+
+# Method-name prefixes considered safe to retry on timeout. The check
+# applies to the last dotted segment of the JSON-RPC method string,
+# lowercased: e.g. `leantime.rpc.Tickets.Tickets.getAllMilestones`
+# -> `getallmilestones` -> starts with `get` -> idempotent.
+_IDEMPOTENT_PREFIXES = (
+    "get", "list", "find", "is", "has", "poll", "read",
+)
+
+
+def _is_idempotent_method(method: str) -> bool:
+    """Return True if the JSON-RPC method is safe to retry on timeout."""
+    last = method.rsplit(".", 1)[-1].lower()
+    return any(last.startswith(p) for p in _IDEMPOTENT_PREFIXES)
 
 
 class _AsyncTokenBucket:
@@ -163,14 +187,41 @@ class LeantimeClient:
         # sharing the limit, drift between our config and Leantime's, etc.).
         await self._limiter.acquire()
 
+        idempotent = _is_idempotent_method(method)
+        timeout_attempts_left = _TIMEOUT_RETRIES if idempotent else 0
+
         async with httpx.AsyncClient() as client:
             for attempt in range(_MAX_RETRIES + 1):
-                response = await client.post(
-                    self.endpoint,
-                    json=payload,
-                    headers=headers,
-                    timeout=30.0,
-                )
+                try:
+                    response = await client.post(
+                        self.endpoint,
+                        json=payload,
+                        headers=headers,
+                        timeout=_TIMEOUT,
+                    )
+                except httpx.ReadTimeout as exc:
+                    # Idempotent reads: retry once (or LEANTIME_TIMEOUT_RETRIES
+                    # times). Writes and other non-idempotent calls fail fast --
+                    # the server may have already applied the change, retrying
+                    # could duplicate it.
+                    if timeout_attempts_left > 0:
+                        timeout_attempts_left -= 1
+                        logger.warning(
+                            "Leantime ReadTimeout on idempotent %s after %.0fs; "
+                            "retrying (%d attempt(s) left)",
+                            method, _TIMEOUT, timeout_attempts_left + 1,
+                        )
+                        continue
+                    raise LeantimeAPIError(
+                        code=-32099,
+                        message=(
+                            f"Timeout calling {method} after {_TIMEOUT:.0f}s"
+                            + (" (no retry: not an idempotent operation)"
+                               if not idempotent else
+                               " (retries exhausted)")
+                        ),
+                        data=str(exc),
+                    ) from exc
 
                 if response.status_code == 429 and attempt < _MAX_RETRIES:
                     delay = self._compute_backoff(response, attempt)
