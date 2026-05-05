@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 from typing import Any, Optional
 
 import httpx
@@ -15,14 +16,72 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Tunable via env vars so deployments can override without a code change.
-# LEANTIME_MAX_RETRIES = number of retry attempts on a 429 (default 5).
-# LEANTIME_BACKOFF_BASE = base backoff in seconds for the exponential schedule
-#   (default 1.0; the n-th retry waits roughly base * 2^n seconds, +/- 25%
-#   jitter, capped at LEANTIME_BACKOFF_CAP).
-# LEANTIME_BACKOFF_CAP = absolute max sleep between retries (default 30s).
+#
+# Reactive layer (handles 429s that slip through the proactive limiter or
+# come from a tighter shared limit, e.g. several MCP clients on one
+# Leantime instance):
+#   LEANTIME_MAX_RETRIES = number of retry attempts on a 429 (default 5).
+#   LEANTIME_BACKOFF_BASE = base seconds for exponential schedule (default
+#     1.0; n-th retry waits ~base * 2^n with 25% jitter, capped at CAP).
+#   LEANTIME_BACKOFF_CAP = absolute max sleep between retries (default 30s).
+#
+# Proactive layer (token-bucket pacing, defaults match Leantime's stock
+# LEAN_RATELIMIT_API = 10 req per 60s window):
+#   LEANTIME_RATE_LIMIT_PER_MIN = sustained req/min target (default 10;
+#     0 disables proactive pacing entirely, leaving only the reactive
+#     retry layer).
+#   LEANTIME_RATE_BURST = max burst capacity in tokens (default 10; lets
+#     short bursts pass at full speed after a quiet period).
 _MAX_RETRIES = int(os.getenv("LEANTIME_MAX_RETRIES", "5"))
 _BACKOFF_BASE = float(os.getenv("LEANTIME_BACKOFF_BASE", "1.0"))
 _BACKOFF_CAP = float(os.getenv("LEANTIME_BACKOFF_CAP", "30.0"))
+_RATE_LIMIT_PER_MIN = float(os.getenv("LEANTIME_RATE_LIMIT_PER_MIN", "10"))
+_RATE_BURST = float(os.getenv("LEANTIME_RATE_BURST", "10"))
+
+
+class _AsyncTokenBucket:
+    """Async token-bucket rate limiter for a single Leantime endpoint.
+
+    Refills at `rate_per_sec` tokens per second up to `capacity`. Each
+    acquire() removes one token, sleeping inside the lock if the bucket
+    is empty so callers serialize FIFO when the limit is saturated.
+
+    rate_per_sec <= 0 disables the limiter; acquire() returns immediately.
+    """
+
+    def __init__(self, rate_per_sec: float, capacity: float):
+        self.rate = max(0.0, rate_per_sec)
+        self.capacity = max(1.0, capacity)
+        self._tokens = float(capacity)
+        self._last = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    @property
+    def enabled(self) -> bool:
+        return self.rate > 0.0
+
+    async def acquire(self) -> None:
+        if not self.enabled:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            self._tokens = min(
+                self.capacity,
+                self._tokens + (now - self._last) * self.rate,
+            )
+            self._last = now
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            wait = (1.0 - self._tokens) / self.rate
+            logger.info(
+                "Leantime rate-limit pacing: sleeping %.2fs before next call "
+                "(target %.1f req/min)",
+                wait, self.rate * 60,
+            )
+            await asyncio.sleep(wait)
+            self._tokens = 0.0
+            self._last = time.monotonic()
 
 
 class LeantimeAPIError(Exception):
@@ -40,7 +99,7 @@ class LeantimeClient:
     
     def __init__(self, base_url: str, api_key: str):
         """Initialize the Leantime client.
-        
+
         Args:
             base_url: Base URL of the Leantime instance (e.g., https://leantime.example.com)
             api_key: API key for authentication
@@ -49,6 +108,12 @@ class LeantimeClient:
         self.api_key = api_key
         self.endpoint = f"{self.base_url}/api/jsonrpc"
         self._request_id = 0
+        # Proactive pacing layer; keeps us under Leantime's per-minute window
+        # so the reactive retry-on-429 in call() rarely has to fire.
+        self._limiter = _AsyncTokenBucket(
+            rate_per_sec=_RATE_LIMIT_PER_MIN / 60.0,
+            capacity=_RATE_BURST,
+        )
     
     def _get_next_id(self) -> int:
         """Get next JSON-RPC request ID."""
@@ -91,6 +156,12 @@ class LeantimeClient:
         }
 
         logger.debug(f"Calling Leantime RPC: {method} with params: {params}")
+
+        # Proactive pacing: wait for a token before issuing the request, so
+        # we stay under Leantime's per-minute limit. The retry loop below is
+        # the reactive safety net for the residual cases (concurrent clients
+        # sharing the limit, drift between our config and Leantime's, etc.).
+        await self._limiter.acquire()
 
         async with httpx.AsyncClient() as client:
             for attempt in range(_MAX_RETRIES + 1):
