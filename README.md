@@ -282,17 +282,17 @@ $EDITOR .env       # set LEANTIME_URL, LEANTIME_API_KEY, LEANTIME_USER_EMAIL, LO
 # 2. Build and start (use the wrapper so version info gets baked in)
 ./scripts/build-and-deploy.sh
 
-# 3. Verify liveness and identity
-curl http://leantime.mcp.home.lan:8000/health
+# 3. Verify liveness and identity (through the reverse proxy with auth)
+curl -k -u user:pass https://leantime.mcp.home.lan/health
 # -> {"status":"ok"}
-curl http://leantime.mcp.home.lan:8000/version
-# -> {"package_version":"1.0.0","git_commit":"...","build_date":"...",...}
+curl -k -u user:pass https://leantime.mcp.home.lan/version
+# -> {"package_version":"1.0.1","git_commit":"...","build_date":"...",...}
 
 # 4. Logs
 docker compose logs -f leantime-mcp
 ```
 
-The MCP endpoint is then available at `http://leantime.mcp.home.lan:8000/mcp` for clients that support `streamableHttp`.
+The MCP endpoint is then available at `https://leantime.mcp.home.lan/mcp` (proxied — no host port binding; the container is only reachable through the reverse proxy on the shared `leantime_mcp_net` Docker network) for clients that support `streamableHttp`.
 
 ### Versioning and "is this the latest binary?" check
 
@@ -332,7 +332,9 @@ docker exec leantime-mcp wget --spider -S http://10.0.0.110:8090/
 
 ### Reverse proxy and authentication
 
-**This codebase has no MCP-layer authentication.** Anyone who can reach port 8000 has full read/write to your Leantime data through the configured API key. Put a reverse proxy with auth in front of it. A minimal Caddyfile example:
+**This codebase has no MCP-layer authentication.** The compose file uses `expose` rather than `ports`, so the container has no host port binding — the only path in is through a reverse proxy attached to the same `leantime_mcp_net` Docker network. The proxy is therefore where authentication lives.
+
+A minimal Caddy example (Caddy container must also be on `leantime_mcp_net` and target the MCP container by its service name, not `localhost`):
 
 ```caddy
 leantime.mcp.home.lan {
@@ -340,11 +342,30 @@ leantime.mcp.home.lan {
         # generate with: caddy hash-password
         someuser <hashed-password>
     }
-    reverse_proxy localhost:8000
+    reverse_proxy leantime-mcp:8000
 }
 ```
 
-Other reasonable options: Tailscale / WireGuard so only authenticated devices can reach the host at all; Traefik or nginx with basic auth or mTLS.
+```yaml
+# docker-compose.caddy.yml (or merge into a single compose file)
+services:
+  caddy:
+    image: caddy:2
+    networks:
+      - leantime_mcp_net
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+networks:
+  leantime_mcp_net:
+    external: true                # created by leantime-mcp's compose
+volumes:
+  caddy_data:
+```
+
+Bearer-token / mTLS / OAuth are equally valid replacements for the `basic_auth` directive — pick whichever your other tooling already speaks. Other reasonable options: Tailscale / WireGuard so only authenticated devices can reach the proxy host at all.
 
 ### Pinning and supply chain
 

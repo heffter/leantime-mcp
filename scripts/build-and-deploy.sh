@@ -29,5 +29,8 @@ echo "  build date:  ${BUILD_DATE}"
 docker compose build --no-cache
 docker compose up -d --force-recreate
 
-echo "Deployed. Verify with:"
-echo "  curl -fsS http://127.0.0.1:8000/version"
+echo "Deployed. The container is on the leantime_mcp_net Docker network"
+echo "with no host port binding, so verify through the reverse proxy:"
+echo "  curl -fsSk -u user:pass https://leantime.mcp.home.lan/version"
+echo "Inside-container probe (no auth, on the same Docker host):"
+echo "  docker exec leantime-mcp wget -qO- http://127.0.0.1:8000/version"
