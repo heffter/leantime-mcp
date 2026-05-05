@@ -247,6 +247,33 @@ class LeantimeClient:
                     await asyncio.sleep(delay)
                     continue
 
+                # 5xx without a JSON-RPC envelope means Leantime served its
+                # generic HTML error page (e.g. PHP exception during data
+                # parse). Extract the requestId for log correlation and
+                # surface a LeantimeAPIError with that context, rather than
+                # discarding the HTML body via raise_for_status().
+                if 500 <= response.status_code < 600:
+                    body = response.text
+                    request_id = "unknown"
+                    # Leantime stamps `<meta name="requestId" content="XXXX">`
+                    # in its error page; grep cheaply without a parser.
+                    import re
+                    m = re.search(r'name="requestId"\s+content="([^"]+)"', body)
+                    if m:
+                        request_id = m.group(1)
+                    raise LeantimeAPIError(
+                        code=-32098,
+                        message=(
+                            f"Leantime returned HTTP {response.status_code} on "
+                            f"{method} (requestId={request_id}); check Leantime "
+                            f"PHP logs (storage/logs/*.log) for the matching "
+                            f"trace. Likely causes: malformed row data "
+                            f"(e.g. 0000-00-00 in a date column), DB "
+                            f"contention, or PHP-FPM exhaustion."
+                        ),
+                        data={"http_status": response.status_code, "request_id": request_id},
+                    )
+
                 response.raise_for_status()
                 data = response.json()
 

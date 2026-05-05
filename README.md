@@ -266,6 +266,30 @@ These are documented inline in each tool's docstring; collected here as a quick 
 - **Bounded concurrency for outbound Leantime calls.** The MCP client wraps `httpx.post` in an `anyio.CapacityLimiter` (default 3 in-flight, configurable via `LEANTIME_MAX_CONCURRENT`). Excess callers wait FIFO. This prevents bursts from saturating Leantime's PHP-FPM workers. Visible via the `get_queue_status` MCP tool — if `in_flight == max_concurrent` for sustained periods, raise the cap or address Leantime-side resource constraints (PHP-FPM workers, MySQL).
 
 - **Tuning Leantime's own rate limit (`LEAN_RATELIMIT_API`).** Stock default is **10 requests per 60-second window**, keyed on `IP + session-user-id` (per-API-key keying is commented out in `RequestRateLimiter.php`). For self-hosted deployments under any AI-driven workload, raise it on the Leantime container's environment, e.g. `LEAN_RATELIMIT_API=200`. Then bump the MCP container's `LEANTIME_RATE_LIMIT_PER_MIN` to match. Without this, the proactive pacing layer effectively throttles every workflow to ~1 request every 6 seconds.
+
+- **Leantime HTTP 500 errors carry a `requestId` for log correlation.** When Leantime returns its generic HTML error page (e.g. PHP exception during data parse, DB contention, PHP-FPM exhaustion), the MCP client extracts the `<meta name="requestId">` value from the body and surfaces it as `LeantimeAPIError(code=-32098, message="Leantime returned HTTP 500 on <method> (requestId=XXXX); ...")` rather than the raw httpx traceback. Match the requestId in `/var/www/html/storage/logs/*.log` (or wherever you've mounted `storage/logs`) for the exact PHP exception. The most common cause we've seen: a row with `dateToFinish = '0000-00-00 00:00:00'` that crashes Carbon's date parser. Recovery requires a direct DB fix (see below); the API can't repair such rows because every write triggers Leantime to re-parse the bad data first.
+
+- **Recovering from `0000-00-00` zero-date corruption.** Ancient MariaDB defaults silently convert empty strings into `0000-00-00 00:00:00` when written to DATETIME columns. Leantime's `?? ''` defaults in `Tickets.updateTicket` make this easy to trigger if any client (us pre-`440e357`, or any non-Leantime SQL touch) ever wrote an empty value. To find and fix:
+
+  ```bash
+  PW=$(grep MYSQL_PASSWORD compose.yaml | head -1 | awk '{print $NF}')
+  # Find affected rows
+  docker exec -i leantime_db mariadb -u leantime -p"$PW" leantime -e \
+    "SELECT id, type, headline, dateToFinish, editFrom, editTo FROM zp_tickets \
+     WHERE dateToFinish='0000-00-00 00:00:00' OR editFrom='0000-00-00 00:00:00' OR editTo='0000-00-00 00:00:00';"
+  # Repair: convert all zero-dates to NULL (the correct "no value" form)
+  docker exec -i leantime_db mariadb -u leantime -p"$PW" leantime -e \
+    "UPDATE zp_tickets SET \
+       dateToFinish = NULLIF(dateToFinish, '0000-00-00 00:00:00'), \
+       editFrom     = NULLIF(editFrom,     '0000-00-00 00:00:00'), \
+       editTo       = NULLIF(editTo,       '0000-00-00 00:00:00');"
+  ```
+
+  Then enable strict SQL mode on the DB so no future write can re-corrupt:
+  ```bash
+  docker exec -i leantime_db mariadb -u leantime -p"$PW" -e \
+    "SET GLOBAL sql_mode='STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'"
+  ```
 - **`get_milestone_progress` is not exposed.** The PHP signature requires a `Milestone` model object; JSON-RPC cannot construct it.
 - **`getTimesheets`/`getAll` for timesheets is not exposed.** Same Carbon-object issue. `get_timesheets` here uses `pollForNewTimesheets` instead.
 - **No deletion** for projects, sprints, or goals via RPC - Leantime's service layer does not expose those operations. Use the web UI.
