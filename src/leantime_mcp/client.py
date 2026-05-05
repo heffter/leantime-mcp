@@ -1094,7 +1094,19 @@ class LeantimeClient:
             raise ValueError(f"Could not determine userId from parent ticket {parent_ticket_id}")
 
         milestone_id = parent_ticket_data.get("milestoneid")
-        
+
+        # Translate the Pythonic camelCase name to Leantime's wire field.
+        # upsert_subtask routes through addTicket internally, and addTicket
+        # reads $values['editorId'], NOT $values['assignedTo']; without this
+        # rename the caller's assignedTo lands in the values dict but
+        # Leantime silently drops it, leaving the subtask unassigned.
+        # Mirrors the same translation in create_ticket / update_ticket.
+        # assignedTo=0 maps to the empty-string "unassign" sentinel.
+        if "assignedTo" in kwargs:
+            _val = kwargs.pop("assignedTo")
+            if _val is not None:
+                kwargs["editorId"] = "" if _val == 0 else _val
+
         # The API expects a 'values' parameter containing the subtask data
         values = {
             "headline": headline,
