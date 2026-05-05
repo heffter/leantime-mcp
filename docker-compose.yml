@@ -14,6 +14,12 @@
 #   - expose (not ports): container reachable only on its Docker network,
 #     not on the host LAN. Reverse proxy (Caddy with bearer token) is
 #     the only path in.
+#
+# The leantime_mcp_net network is declared external because it is shared
+# with the reverse-proxy stack. The build-and-deploy.sh wrapper creates
+# it before running compose if it doesn't exist (idempotent).
+
+name: leantime-mcp
 
 services:
   leantime-mcp:
@@ -52,3 +58,4 @@ services:
 networks:
   leantime_mcp_net:
     name: leantime_mcp_net
+    external: true

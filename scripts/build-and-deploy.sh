@@ -26,6 +26,24 @@ echo "  git commit: ${GIT_COMMIT}"
 echo "  commit date: ${GIT_COMMIT_DATE}"
 echo "  build date:  ${BUILD_DATE}"
 
+# Ensure the shared Docker network exists. Idempotent: docker network create
+# fails if the network already exists, so we suppress that specific error.
+# The compose file declares this network as `external: true`, so neither this
+# stack nor the reverse-proxy stack tries to create it itself.
+if ! docker network inspect leantime_mcp_net >/dev/null 2>&1; then
+    echo "Creating shared Docker network leantime_mcp_net..."
+    docker network create leantime_mcp_net >/dev/null
+fi
+
+# Defensive: remove any stale container with the same name before compose up.
+# This guards against the case where a previous deployment created the
+# container under a different compose project name (e.g. directory rename),
+# leaving compose unable to manage it.
+if docker container inspect leantime-mcp >/dev/null 2>&1; then
+    echo "Removing existing leantime-mcp container..."
+    docker rm -f leantime-mcp >/dev/null
+fi
+
 docker compose build --no-cache
 docker compose up -d --force-recreate
 
