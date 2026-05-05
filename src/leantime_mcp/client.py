@@ -4,11 +4,25 @@
 
 """Leantime JSON-RPC 2.0 client implementation."""
 
-import httpx
-from typing import Any, Optional
+import asyncio
 import logging
+import os
+import random
+from typing import Any, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
+
+# Tunable via env vars so deployments can override without a code change.
+# LEANTIME_MAX_RETRIES = number of retry attempts on a 429 (default 5).
+# LEANTIME_BACKOFF_BASE = base backoff in seconds for the exponential schedule
+#   (default 1.0; the n-th retry waits roughly base * 2^n seconds, +/- 25%
+#   jitter, capped at LEANTIME_BACKOFF_CAP).
+# LEANTIME_BACKOFF_CAP = absolute max sleep between retries (default 30s).
+_MAX_RETRIES = int(os.getenv("LEANTIME_MAX_RETRIES", "5"))
+_BACKOFF_BASE = float(os.getenv("LEANTIME_BACKOFF_BASE", "1.0"))
+_BACKOFF_CAP = float(os.getenv("LEANTIME_BACKOFF_CAP", "30.0"))
 
 
 class LeantimeAPIError(Exception):
@@ -43,16 +57,25 @@ class LeantimeClient:
     
     async def call(self, method: str, params: Optional[dict] = None) -> Any:
         """Make a JSON-RPC 2.0 call to Leantime API.
-        
+
+        Retries automatically on 429 (Leantime's per-minute rate limit)
+        with backoff before giving up. Honors a `Retry-After` response
+        header if Leantime sends one; otherwise falls back to exponential
+        backoff (~1s, 2s, 4s, 8s, 16s) with 25% jitter, capped at
+        LEANTIME_BACKOFF_CAP seconds per retry. Tuneable via env vars
+        (see module-level constants).
+
         Args:
             method: RPC method name (e.g., "leantime.rpc.Projects.getProject")
             params: Method parameters as dictionary
-            
+
         Returns:
             The result from the JSON-RPC response
-            
+
         Raises:
             LeantimeAPIError: If the API returns an error
+            httpx.HTTPStatusError: If a non-429 HTTP error occurred, or 429
+                persisted past LEANTIME_MAX_RETRIES attempts.
             httpx.HTTPError: If there's a network/HTTP error
         """
         payload = {
@@ -61,36 +84,68 @@ class LeantimeClient:
             "params": params or {},
             "id": self._get_next_id()
         }
-        
+
         headers = {
             "Content-Type": "application/json",
             "X-API-KEY": self.api_key
         }
-        
+
         logger.debug(f"Calling Leantime RPC: {method} with params: {params}")
-        
+
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.endpoint,
-                json=payload,
-                headers=headers,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Check for JSON-RPC error
-            if "error" in data:
-                error = data["error"]
-                raise LeantimeAPIError(
-                    code=error.get("code", -1),
-                    message=error.get("message", "Unknown error"),
-                    data=error.get("data")
+            for attempt in range(_MAX_RETRIES + 1):
+                response = await client.post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=30.0,
                 )
-            
-            # Return the result
-            return data.get("result")
+
+                if response.status_code == 429 and attempt < _MAX_RETRIES:
+                    delay = self._compute_backoff(response, attempt)
+                    logger.warning(
+                        "Leantime rate-limited (429) on %s "
+                        "(attempt %d/%d); backing off for %.1fs",
+                        method, attempt + 1, _MAX_RETRIES + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+
+                # Check for JSON-RPC error
+                if "error" in data:
+                    error = data["error"]
+                    raise LeantimeAPIError(
+                        code=error.get("code", -1),
+                        message=error.get("message", "Unknown error"),
+                        data=error.get("data")
+                    )
+
+                return data.get("result")
+
+            # Retries exhausted; surface the last 429 to the caller.
+            response.raise_for_status()
+
+    @staticmethod
+    def _compute_backoff(response: httpx.Response, attempt: int) -> float:
+        """Pick a sleep duration for the next retry.
+
+        Honors `Retry-After` (seconds form; HTTP-date form is rare for
+        per-minute rate limiters and falls through to exponential backoff
+        if unparseable). Otherwise: base * 2^attempt with 25% jitter,
+        capped at _BACKOFF_CAP.
+        """
+        retry_after = response.headers.get("Retry-After", "").strip()
+        if retry_after:
+            try:
+                return min(max(float(retry_after), 0.0), _BACKOFF_CAP)
+            except ValueError:
+                pass
+        delay = _BACKOFF_BASE * (2 ** attempt)
+        delay += random.uniform(0, delay * 0.25)
+        return min(delay, _BACKOFF_CAP)
     
     # Convenience methods for common operations
     
